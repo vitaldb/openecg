@@ -125,3 +125,46 @@ def load_metadata() -> list[dict]:
         r["pacemaker"] = bool(r.get("Cardiac pacing", "").strip())
         r["id_int"] = int(r["ID"])
     return rows
+
+
+def stratified_split(seed: int = 42, val_frac: float = 0.2) -> dict[str, list[int]]:
+    """Rhythm-stratified record-level train/val split.
+
+    Each rhythm class is split independently to preserve class balance.
+    Reproducible via numpy default_rng(seed).
+    """
+    meta = load_metadata()
+    by_rhythm: dict[str, list[int]] = defaultdict(list)
+    for r in meta:
+        by_rhythm[r["rhythm"]].append(r["id_int"])
+
+    rng = np.random.default_rng(seed)
+    train_ids: list[int] = []
+    val_ids: list[int] = []
+    for rhythm, ids in sorted(by_rhythm.items()):
+        ids_sorted = sorted(ids)
+        rng.shuffle(ids_sorted)
+        n_val = round(len(ids_sorted) * val_frac)
+        val_ids.extend(ids_sorted[:n_val])
+        train_ids.extend(ids_sorted[n_val:])
+
+    return {
+        "train": sorted(train_ids),
+        "val": sorted(val_ids),
+        "seed": seed,
+        "val_frac": val_frac,
+    }
+
+
+def save_split_json(out_path: Path | str = "data/splits/ludb_v1.json", seed: int = 42):
+    """Generate stratified split and save to JSON for reproducibility lock-in."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    split = stratified_split(seed=seed)
+    out_path.write_text(json.dumps(split, indent=2))
+    return split
+
+
+def load_split(path: Path | str = "data/splits/ludb_v1.json") -> dict[str, list[int]]:
+    """Load committed split JSON."""
+    return json.loads(Path(path).read_text())
