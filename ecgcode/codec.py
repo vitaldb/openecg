@@ -43,10 +43,22 @@ def encode(events: list[tuple[int, int]]) -> np.ndarray:
 
 
 def decode(packed: np.ndarray) -> list[tuple[int, int]]:
-    """Unpack uint16 array to (symbol_id, length_ms) events."""
+    """Unpack uint16 array to (symbol_id, length_ms) events.
+
+    Consecutive runs of the same symbol are merged so that long events split
+    by `encode` (>1020ms) round-trip losslessly.
+    """
     types = (packed >> 8).astype(np.uint8)
     units = (packed & 0xFF).astype(np.uint8)
-    return [(int(t), int(u) * MS_PER_UNIT) for t, u in zip(types, units)]
+    out: list[tuple[int, int]] = []
+    for t, u in zip(types, units):
+        sym = int(t)
+        ms = int(u) * MS_PER_UNIT
+        if out and out[-1][0] == sym:
+            out[-1] = (sym, out[-1][1] + ms)
+        else:
+            out.append((sym, ms))
+    return out
 
 
 def to_frames(

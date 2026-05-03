@@ -121,16 +121,34 @@ def label(
 
 
 def _rle_compress(labels: np.ndarray, ms_per_sample: float) -> list:
-    """Group consecutive identical labels -> list of (symbol_id, length_ms)."""
+    """Group consecutive identical labels -> list of (symbol_id, length_ms).
+
+    Lengths are snapped to the codec grid (4ms) using cumulative rounding so
+    rounding error never drifts more than 4ms from the true total. Single-sample
+    pacer spikes are always emitted as 4ms (the minimum codec quantum).
+    """
+    from ecgcode.codec import MS_PER_UNIT
+
     if len(labels) == 0:
         return []
     change_idx = np.flatnonzero(np.diff(labels)) + 1
     boundaries = np.concatenate(([0], change_idx, [len(labels)]))
+
     events = []
+    cum_true_ms = 0.0
+    cum_emitted_ms = 0
     for start, end in zip(boundaries[:-1], boundaries[1:]):
         sym = int(labels[start])
         n = int(end - start)
-        ms = int(round(n * ms_per_sample))
-        if ms > 0:
-            events.append((sym, ms))
+        cum_true_ms += n * ms_per_sample
+        # Snap cumulative end to 4ms grid; segment length = grid_end - prev_emitted
+        grid_end = int(round(cum_true_ms / MS_PER_UNIT)) * MS_PER_UNIT
+        ms = grid_end - cum_emitted_ms
+        if ms <= 0:
+            # Segment too short to land on a new grid line; force 1 quantum so
+            # we don't drop the symbol (e.g. a single-sample pacer spike).
+            ms = MS_PER_UNIT
+            grid_end = cum_emitted_ms + MS_PER_UNIT
+        events.append((sym, ms))
+        cum_emitted_ms = grid_end
     return events
