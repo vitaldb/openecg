@@ -3,6 +3,8 @@
 See spec: docs/superpowers/specs/2026-05-03-ecgcode-stage1-design.md
 """
 
+VOCAB_VERSION = "1.0"
+
 ID_PAD = 0
 ID_UNK = 1
 ID_ISO = 2

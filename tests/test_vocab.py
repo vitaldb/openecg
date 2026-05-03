@@ -51,3 +51,15 @@ def test_iso_id_is_2():
 
 def test_w_id_is_10():
     assert vocab.ID_W == 10
+
+
+def test_ids_are_contiguous_from_zero():
+    assert sorted(vocab.ID_TO_CHAR.keys()) == list(range(13))
+
+
+def test_char_and_name_dicts_have_same_keys():
+    assert set(vocab.ID_TO_CHAR) == set(vocab.ID_TO_NAME)
+
+
+def test_pad_not_in_active():
+    assert vocab.ID_PAD not in vocab.ACTIVE_V1
