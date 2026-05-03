@@ -12,9 +12,9 @@ class FrameClassifier(nn.Module):
     def __init__(
         self,
         n_leads=12,
-        d_model=64,
+        d_model=128,
         n_heads=4,
-        n_layers=4,
+        n_layers=8,
         ff=256,
         n_classes=4,
         dropout=0.1,

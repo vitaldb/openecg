@@ -71,3 +71,41 @@ def compute_class_weights(counts):
     weights = 1.0 / np.sqrt(counts + 1e-6)
     weights = weights / weights.sum() * n
     return weights.astype(np.float64)
+
+
+class LUDBFrameDatasetAugmented(LUDBFrameDataset):
+    """Same data, with training-time augmentation: gaussian noise + time shift + amplitude scaling."""
+
+    def __init__(self, record_ids, noise_sigma=0.05, max_shift=20, amp_scale_range=0.2, seed=None):
+        super().__init__(record_ids)
+        self.noise_sigma = noise_sigma
+        self.max_shift = max_shift
+        self.amp_scale_range = amp_scale_range
+        self.rng = np.random.default_rng(seed)
+
+    def __getitem__(self, idx):
+        sig, lead_id, labels = super().__getitem__(idx)
+        sig_np = sig.numpy()
+        labels_np = labels.numpy()
+
+        # Time shift (samples at 250Hz; labels at 50Hz so shift by samples//5)
+        shift = int(self.rng.integers(-self.max_shift, self.max_shift + 1))
+        if shift != 0:
+            sig_np = np.roll(sig_np, shift)
+            label_shift = shift // 5  # 5 samples = 1 frame at 50Hz
+            if label_shift != 0:
+                labels_np = np.roll(labels_np, label_shift)
+
+        # Amplitude scaling
+        amp_scale = 1.0 + float(self.rng.uniform(-self.amp_scale_range, self.amp_scale_range))
+        sig_np = sig_np * amp_scale
+
+        # Gaussian noise
+        noise = self.rng.normal(0, self.noise_sigma, size=sig_np.shape).astype(np.float32)
+        sig_np = sig_np + noise
+
+        return (
+            torch.from_numpy(sig_np.astype(np.float32)),
+            lead_id,
+            torch.from_numpy(labels_np.astype(np.int64)),
+        )

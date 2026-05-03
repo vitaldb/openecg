@@ -12,12 +12,12 @@ from ecgcode import eval as ecg_eval
 
 @dataclass
 class TrainConfig:
-    epochs: int = 50
+    epochs: int = 100
     batch_size: int = 64
     lr: float = 1e-3
     weight_decay: float = 1e-4
     warmup_frac: float = 0.05
-    early_stop_patience: int = 10
+    early_stop_patience: int = 20
     grad_clip: float = 1.0
     seed: int = 42
 
