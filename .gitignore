@@ -46,7 +46,9 @@ uv.lock
 *.qrs
 *.vital
 *.wfdb
-data/
+data/*
+!data/splits/
+!data/splits/*.json
 datasets/
 
 # Model checkpoints
