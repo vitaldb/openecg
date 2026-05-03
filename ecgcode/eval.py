@@ -118,6 +118,20 @@ def boundary_error(
     }
 
 
+def boundary_f1(pred_indices, true_indices, tolerance_ms, fs):
+    """Compute F1 from boundary_error sensitivity and PPV.
+
+    Literature standard: each true boundary matched to a predicted boundary within
+    tolerance_ms gives a TP. Sensitivity = TP / |true|, PPV = TP / |pred|.
+    F1 = 2 * sens * PPV / (sens + PPV).
+    """
+    res = boundary_error(pred_indices, true_indices, tolerance_ms=tolerance_ms, fs=fs)
+    sens = res["sensitivity"]
+    ppv = res["ppv"]
+    f1 = 2 * sens * ppv / (sens + ppv) if (sens + ppv) > 0 else 0.0
+    return {**res, "f1": f1}
+
+
 def _empty_boundary_result():
     return {
         "sensitivity": 0.0, "ppv": 0.0, "n_hits": 0, "n_true": 0, "n_pred": 0,

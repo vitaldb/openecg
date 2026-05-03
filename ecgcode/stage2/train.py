@@ -22,7 +22,23 @@ class TrainConfig:
     seed: int = 42
 
 
-def train_one_epoch(model, loader, optimizer, class_weights, device):
+def focal_cross_entropy(logits, target, weight=None, gamma=2.0):
+    """Focal cross-entropy loss for class imbalance.
+
+    logits: [B, C, ...] (already permuted so class axis is dim=1)
+    target: [B, ...] integer class labels
+    weight: optional per-class weight tensor of shape [C]
+    gamma: focusing parameter (paper recommends 2.0)
+    """
+    log_probs = nn.functional.log_softmax(logits, dim=1)
+    probs = log_probs.exp()
+    nll = nn.functional.nll_loss(log_probs, target, weight=weight, reduction="none")
+    pt = probs.gather(1, target.unsqueeze(1)).squeeze(1).clamp(min=1e-8)
+    focal_factor = (1.0 - pt).pow(gamma)
+    return (focal_factor * nll).mean()
+
+
+def train_one_epoch(model, loader, optimizer, class_weights, device, gamma=2.0):
     model.train()
     weights = class_weights.to(device)
     total_loss = 0.0
@@ -32,8 +48,8 @@ def train_one_epoch(model, loader, optimizer, class_weights, device):
         leads = leads.to(device)
         labels = labels.to(device)
         logits = model(sigs, leads)
-        loss = nn.functional.cross_entropy(
-            logits.transpose(1, 2), labels, weight=weights
+        loss = focal_cross_entropy(
+            logits.transpose(1, 2), labels, weight=weights, gamma=gamma,
         )
         optimizer.zero_grad()
         loss.backward()

@@ -173,3 +173,28 @@ class CombinedFrameDataset(Dataset):
     def source_counts(self):
         from collections import Counter
         return Counter(item[0] for item in self.items)
+
+
+class CombinedFrameDatasetAugmented(CombinedFrameDataset):
+    """Same as CombinedFrameDataset but applies ECG-specific signal-domain augmentation.
+
+    Augmentations are pure signal-domain (powerline / sine / white noise / amplitude scale)
+    so labels are unchanged. Per SemiSegECG (arXiv 2507.18323), we avoid horizontal flip
+    and baseline shift since they harm delineation models.
+    """
+
+    def __init__(self, sources, n_ops=2, seed=42):
+        super().__init__(sources)
+        self.n_ops = n_ops
+        self.rng = np.random.default_rng(seed)
+
+    def __getitem__(self, idx):
+        from ecgcode.stage2.augment import randaugment_ecg
+        sig, lead_idx, labels = super().__getitem__(idx)
+        sig_np = sig.numpy()
+        sig_np = randaugment_ecg(sig_np, fs=250, n_ops=self.n_ops, rng=self.rng)
+        return (
+            torch.from_numpy(sig_np.astype(np.float32)),
+            lead_idx,
+            labels,
+        )
