@@ -113,3 +113,29 @@ def test_render_json():
     events = [(vocab.ID_ISO, 100), (vocab.ID_P, 92)]
     j = codec.render_json(events)
     assert j == [{"sym": "iso", "ms": 100}, {"sym": "P", "ms": 92}]
+
+
+def test_from_frames_basic():
+    frames = np.array([vocab.ID_ISO]*5 + [vocab.ID_P]*5, dtype=np.uint8)
+    events = codec.from_frames(frames, frame_ms=20)
+    assert events == [(vocab.ID_ISO, 100), (vocab.ID_P, 100)]
+
+
+def test_from_frames_single_frame_event():
+    frames = np.array([vocab.ID_ISO, vocab.ID_PACER, vocab.ID_ISO], dtype=np.uint8)
+    events = codec.from_frames(frames, frame_ms=20)
+    assert events == [(vocab.ID_ISO, 20), (vocab.ID_PACER, 20), (vocab.ID_ISO, 20)]
+
+
+def test_from_frames_roundtrip_with_to_frames():
+    events = [(vocab.ID_ISO, 100), (vocab.ID_P, 100), (vocab.ID_ISO, 80),
+              (vocab.ID_R, 60), (vocab.ID_T, 200)]
+    frames = codec.to_frames(events, frame_ms=20)
+    recovered = codec.from_frames(frames, frame_ms=20)
+    assert [s for s, _ in recovered] == [s for s, _ in events]
+    assert sum(ms for _, ms in recovered) == sum(ms for _, ms in events)
+
+
+def test_from_frames_empty():
+    frames = np.array([], dtype=np.uint8)
+    assert codec.from_frames(frames, frame_ms=20) == []

@@ -125,3 +125,20 @@ def render_timed(events: list[tuple[int, int]], ms_per_char: int = 20) -> str:
 def render_json(events: list[tuple[int, int]]) -> list[dict]:
     """Verbose JSON view: [{'sym': name, 'ms': length}, ...]."""
     return [{"sym": vocab.ID_TO_NAME[sym], "ms": ms} for sym, ms in events]
+
+
+def from_frames(frames: np.ndarray, frame_ms: int = 20) -> list[tuple[int, int]]:
+    """Run-length encode per-frame array to list of (symbol_id, length_ms) events.
+
+    Inverse of to_frames at frame granularity. Output durations are multiples of frame_ms.
+    """
+    if len(frames) == 0:
+        return []
+    change_idx = np.flatnonzero(np.diff(frames)) + 1
+    boundaries = np.concatenate(([0], change_idx, [len(frames)]))
+    events = []
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        sym = int(frames[start])
+        n_frames = end - start
+        events.append((sym, n_frames * frame_ms))
+    return events
