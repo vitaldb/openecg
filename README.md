@@ -39,6 +39,8 @@ NK dwt over-detects waves vs cardiologist (boundary precision is high but recall
 
 Stage 2 spec: `docs/superpowers/specs/2026-05-03-ecgcode-stage2-design.md`. Plan: `docs/superpowers/plans/2026-05-03-ecgcode-stage2.md`. Train: `scripts/train_stage2.py` (~35s on RTX 4090). Validate: `scripts/validate_stage2.py`. Checkpoint: `data/checkpoints/stage2_v1.pt` (gitignored).
 
+**v1.1 ablation (uniformly worse, kept for reference)**: scaling model to d=128/L=8 + augmentation + longer training produced ~-0.013 F1 across all classes (P=0.591, QRS=0.791, T=0.683). Conclusion: 211K params is right-sized for 1908 LUDB sequences; bigger model without more data slightly regresses. Augmentation (time-shift especially) may have introduced label/signal misalignment. Reverted defaults to v1.0; LUDBFrameDatasetAugmented kept for future v3 experiments. Ablation script: `scripts/train_stage2_v11.py`.
+
 ## Setup
 
 ```bash

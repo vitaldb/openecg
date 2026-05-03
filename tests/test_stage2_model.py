@@ -11,10 +11,10 @@ def test_forward_shape_cpu():
     assert out.shape == (4, 500, 4)
 
 
-def test_param_count_under_2m():
+def test_param_count_under_500k():
     model = FrameClassifier()
     n_params = sum(p.numel() for p in model.parameters())
-    assert 500_000 < n_params < 2_500_000, f"got {n_params} params (target ~1.5M)"
+    assert 200_000 < n_params < 500_000, f"got {n_params} params"
 
 
 def test_forward_gpu():
