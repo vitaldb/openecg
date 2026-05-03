@@ -113,3 +113,18 @@ def annotated_window(ann_dict: dict, window_samples: int = 2500, fs: int = 250) 
     start = max(0, mid - window_samples // 2)
     end = start + window_samples
     return (start, end)
+
+
+def load_annotations_as_super(record_id: str, window: tuple[int, int] | None = None) -> dict[str, list[int]]:
+    """Wrapper around load_q1c that returns LUDB-style super dict.
+    If window=(start, end), only returns annotations within window (samples re-zeroed)."""
+    ann = load_q1c(record_id)
+    if window is None:
+        return ann
+    start, end = window
+    out = {k: [] for k in ann.keys()}
+    for k, vals in ann.items():
+        for s in vals:
+            if start <= s < end:
+                out[k].append(s - start)
+    return out
