@@ -167,17 +167,23 @@ class CombinedFrameDataset(Dataset):
                 sig_1000 = record[lead]
                 sig_250 = _decimate_to_250(sig_1000, 1000)
                 sig_n = _normalize(sig_250)
+                # Pad signal to WINDOW_SAMPLES so the model always receives a
+                # 10s tensor. ISP records are typically 9998-9999 samples at
+                # 1000Hz, decimating to 2499-2500 at 250Hz.
                 if len(sig_n) >= WINDOW_SAMPLES:
                     sig_n = sig_n[:WINDOW_SAMPLES]
                 else:
-                    continue
+                    pad = np.zeros(WINDOW_SAMPLES - len(sig_n), dtype=sig_n.dtype)
+                    sig_n = np.concatenate([sig_n, pad])
                 labels = ee.gt_to_super_frames(
                     ann_super, n_samples=len(sig_1000), fs=1000, frame_ms=FRAME_MS
                 ).astype(np.int64)
+                # Same for labels: pad to WINDOW_FRAMES with SUPER_OTHER.
                 if len(labels) >= WINDOW_FRAMES:
                     labels = labels[:WINDOW_FRAMES]
                 else:
-                    continue
+                    pad = np.full(WINDOW_FRAMES - len(labels), ee.SUPER_OTHER, dtype=labels.dtype)
+                    labels = np.concatenate([labels, pad])
                 self._add(sig_n, lead_idx, labels, ("isp", rid, lead))
 
     def __len__(self):

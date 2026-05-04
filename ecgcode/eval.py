@@ -149,7 +149,19 @@ def events_to_super_frames(events, n_samples, fs=500, frame_ms=20):
 
 
 def gt_to_super_frames(gt_ann, n_samples, fs=500, frame_ms=20):
-    """LUDB cardiologist annotation dict → per-frame supercategory array (majority per frame)."""
+    """LUDB cardiologist annotation dict → per-frame supercategory array (majority per frame).
+
+    samples_per_frame is fixed by physical time (fs * frame_ms / 1000) so each
+    output frame represents exactly frame_ms of signal. n_frames = n_samples //
+    samples_per_frame; trailing samples that don't fit a full frame are dropped.
+    Earlier versions computed samples_per_frame = n_samples // n_frames, which
+    introduced cumulative time drift (up to 500ms by frame 499) when n_samples
+    was not a clean multiple of samples-per-frame (e.g. ISP records of 9998-9999
+    samples at 1000Hz with frame_ms=20).
+    """
+    samples_per_frame = round(fs * frame_ms / 1000.0)
+    if samples_per_frame < 1:
+        samples_per_frame = 1
     sample_labels = np.full(n_samples, SUPER_OTHER, dtype=np.uint8)
     for on, off in zip(gt_ann["p_on"], gt_ann["p_off"]):
         sample_labels[on:off + 1] = SUPER_P
@@ -157,13 +169,10 @@ def gt_to_super_frames(gt_ann, n_samples, fs=500, frame_ms=20):
         sample_labels[on:off + 1] = SUPER_QRS
     for on, off in zip(gt_ann["t_on"], gt_ann["t_off"]):
         sample_labels[on:off + 1] = SUPER_T
-    n_frames = round(n_samples * 1000.0 / fs / frame_ms)
-    samples_per_frame = n_samples // n_frames if n_frames > 0 else 1
+    n_frames = n_samples // samples_per_frame
     out = np.zeros(n_frames, dtype=np.uint8)
     for f in range(n_frames):
         seg = sample_labels[f * samples_per_frame: (f + 1) * samples_per_frame]
-        if len(seg) == 0:
-            continue
         vals, counts = np.unique(seg, return_counts=True)
         out[f] = vals[np.argmax(counts)]
     return out

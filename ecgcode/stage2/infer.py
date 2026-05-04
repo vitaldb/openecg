@@ -37,11 +37,17 @@ def predict_to_events(model, sig, lead_id, device="cuda", frame_ms=20):
     return codec.from_frames(frames, frame_ms=frame_ms)
 
 
-def post_process_frames(frames, frame_ms=20, min_duration_ms=40, merge_gap_ms=300):
+def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=200):
     """Apply post-processing to per-frame supercategory array.
 
     1. Remove segments shorter than min_duration_ms (replace with previous-segment label).
     2. Merge same-class segments separated by a gap shorter than merge_gap_ms.
+
+    Defaults tuned via `scripts/tune_postproc_v4.py` on LUDB val (24-combo grid):
+    (60, 200) gives best avg boundary F1 across both C (combined) and F (LUDB-only)
+    checkpoints. F gains ~+0.022 avg, C gains ~+0.010 avg vs the previous (40, 300)
+    defaults. Per-class optima vary (QRS prefers smaller min, P/T prefer larger),
+    but (60, 200) is a robust single-default compromise.
     """
     if len(frames) == 0:
         return np.asarray(frames, dtype=np.uint8)

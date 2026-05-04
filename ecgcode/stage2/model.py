@@ -18,11 +18,14 @@ class FrameClassifier(nn.Module):
         ff=256,
         n_classes=4,
         dropout=0.1,
+        use_lead_emb=True,
     ):
         super().__init__()
+        self.use_lead_emb = use_lead_emb
         self.conv1 = nn.Conv1d(1, 32, kernel_size=15, stride=5, padding=7)
         self.conv2 = nn.Conv1d(32, d_model, kernel_size=5, stride=1, padding=2)
-        self.lead_emb = nn.Embedding(n_leads, d_model)
+        if use_lead_emb:
+            self.lead_emb = nn.Embedding(n_leads, d_model)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -40,6 +43,7 @@ class FrameClassifier(nn.Module):
         h = torch.nn.functional.gelu(self.conv1(x.unsqueeze(1)))
         h = torch.nn.functional.gelu(self.conv2(h))
         h = h.transpose(1, 2)
-        h = h + self.lead_emb(lead_id).unsqueeze(1)
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
         h = self.transformer(h)
         return self.head(h)
