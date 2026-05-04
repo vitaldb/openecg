@@ -18,6 +18,7 @@ class TrainConfig:
     weight_decay: float = 1e-4
     warmup_frac: float = 0.05
     early_stop_patience: int = 10
+    early_stop_metric: str = "mean_wave_f1"
     grad_clip: float = 1.0
     seed: int = 42
 
@@ -46,7 +47,8 @@ def focal_cross_entropy(logits, target, weight=None, gamma=2.0, ignore_index=255
 
 
 def train_one_epoch(model, loader, optimizer, class_weights, device,
-                    use_focal=True, focal_gamma=2.0, ignore_index=255):
+                    use_focal=True, focal_gamma=2.0, ignore_index=255,
+                    grad_clip=1.0, scheduler=None):
     model.train()
     weights = class_weights.to(device)
     total_loss = 0.0
@@ -68,8 +70,11 @@ def train_one_epoch(model, loader, optimizer, class_weights, device,
             )
         optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if grad_clip is not None and grad_clip > 0:
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
         total_loss += float(loss.item())
         n_batches += 1
     return total_loss / max(1, n_batches)
@@ -94,25 +99,51 @@ def run_eval(model, loader, device):
     return ecg_eval.frame_f1(pred_concat, true_concat)
 
 
-def save_checkpoint(path, model, metrics, config):
+def save_checkpoint(path, model, metrics, config, model_config=None,
+                    postprocess_config=None, boundary_shift_ms=None,
+                    extra=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_model_config = model_config
+    if resolved_model_config is None:
+        resolved_model_config = getattr(model, "model_config", None)
     torch.save({
         "model_state": model.state_dict(),
         "metrics": metrics,
         "config": asdict(config),
+        "model_config": resolved_model_config,
+        "postprocess_config": postprocess_config or {},
+        "boundary_shift_ms": boundary_shift_ms or {},
+        "extra": extra or {},
     }, path)
 
 
+def load_checkpoint_blob(path):
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
 def load_checkpoint(path, model):
-    blob = torch.load(path, map_location="cpu", weights_only=False)
+    blob = load_checkpoint_blob(path)
     model.load_state_dict(blob["model_state"])
     return blob["metrics"]
 
 
+def score_val_metrics(metrics, metric_name="mean_wave_f1"):
+    """Return scalar early-stop score from frame metrics."""
+    if metric_name == "qrs_f1":
+        return metrics[ecg_eval.SUPER_QRS]["f1"]
+    if metric_name == "mean_wave_f1":
+        return float(np.mean([
+            metrics[ecg_eval.SUPER_P]["f1"],
+            metrics[ecg_eval.SUPER_QRS]["f1"],
+            metrics[ecg_eval.SUPER_T]["f1"],
+        ]))
+    raise ValueError(f"unknown early_stop_metric: {metric_name}")
+
+
 def fit(model, train_loader, val_loader, class_weights, config,
         device="cuda", ckpt_path=None, log_fn=print, use_focal=True):
-    """Full training: cosine schedule, early stopping on val QRS F1."""
+    """Full training: cosine schedule, early stopping on validation F1."""
     model = model.to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay
@@ -128,27 +159,30 @@ def fit(model, train_loader, val_loader, class_weights, config,
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-    best_qrs = -1.0
+    best_score = -1.0
     best_metrics = None
     epochs_without_improvement = 0
 
     for epoch in range(config.epochs):
         train_loss = train_one_epoch(
             model, train_loader, optimizer, class_weights, device, use_focal=use_focal,
+            grad_clip=config.grad_clip, scheduler=scheduler,
         )
-        for _ in range(len(train_loader)):
-            scheduler.step()
         val_metrics = run_eval(model, val_loader, device)
+        val_score = score_val_metrics(val_metrics, config.early_stop_metric)
         qrs_f1 = val_metrics[ecg_eval.SUPER_QRS]["f1"]
         log_fn(
             f"epoch {epoch:3d}  train_loss={train_loss:.4f}  "
             f"val_F1: P={val_metrics[ecg_eval.SUPER_P]['f1']:.3f} "
-            f"QRS={qrs_f1:.3f} T={val_metrics[ecg_eval.SUPER_T]['f1']:.3f}"
+            f"QRS={qrs_f1:.3f} T={val_metrics[ecg_eval.SUPER_T]['f1']:.3f} "
+            f"score={val_score:.3f}"
         )
-        if qrs_f1 > best_qrs:
-            best_qrs = qrs_f1
+        if val_score > best_score:
+            best_score = val_score
             best_metrics = {
                 "epoch": epoch,
+                "early_stop_metric": config.early_stop_metric,
+                "val_score": val_score,
                 "val_qrs_f1": qrs_f1,
                 "val_p_f1": val_metrics[ecg_eval.SUPER_P]["f1"],
                 "val_t_f1": val_metrics[ecg_eval.SUPER_T]["f1"],

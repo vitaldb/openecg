@@ -21,6 +21,16 @@ class FrameClassifier(nn.Module):
         use_lead_emb=True,
     ):
         super().__init__()
+        self.model_config = {
+            "n_leads": n_leads,
+            "d_model": d_model,
+            "n_heads": n_heads,
+            "n_layers": n_layers,
+            "ff": ff,
+            "n_classes": n_classes,
+            "dropout": dropout,
+            "use_lead_emb": use_lead_emb,
+        }
         self.use_lead_emb = use_lead_emb
         self.conv1 = nn.Conv1d(1, 32, kernel_size=15, stride=5, padding=7)
         self.conv2 = nn.Conv1d(32, d_model, kernel_size=5, stride=1, padding=2)

@@ -5,6 +5,7 @@ from ecgcode.stage2.augment import (
     powerline_noise,
     randaugment_ecg,
     sine_noise,
+    time_shift_aligned,
     white_noise,
 )
 
@@ -43,3 +44,22 @@ def test_sine_noise_changes_signal():
     rng = np.random.default_rng(1)
     out = sine_noise(sig, fs=250, amplitude=0.03, rng=rng)
     assert np.abs(out).max() > 0.0
+
+
+def test_time_shift_zero_is_identity():
+    sig = np.arange(20, dtype=np.float32)
+    labels = np.arange(4, dtype=np.int64)
+    out_sig, out_labels = time_shift_aligned(sig, labels, max_shift_ms=0)
+    assert np.array_equal(out_sig, sig)
+    assert np.array_equal(out_labels, labels)
+
+
+def test_time_shift_does_not_wrap_edges():
+    sig = np.arange(20, dtype=np.float32)
+    labels = np.arange(4, dtype=np.int64)
+    rng = np.random.default_rng(0)
+    out_sig, out_labels = time_shift_aligned(sig, labels, max_shift_ms=20, rng=rng)
+    assert out_sig.shape == sig.shape
+    assert out_labels.shape == labels.shape
+    assert out_sig[0] in (sig[0], sig[5])
+    assert out_sig[-1] in (sig[-1], sig[-6])

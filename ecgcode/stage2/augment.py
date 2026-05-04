@@ -79,9 +79,13 @@ def time_shift_aligned(sig, labels, fs_sig=250, frame_ms=20,
     array stays exactly aligned with the signal. Vacated edge is filled with
     the boundary value (replication pad).
     """
+    if max_shift_ms <= 0:
+        return sig, labels
     rng = rng or np.random.default_rng()
     samples_per_frame = int(round(frame_ms * fs_sig / 1000.0))
-    max_frames = max(1, int(max_shift_ms / frame_ms))
+    max_frames = int(max_shift_ms / frame_ms)
+    if max_frames <= 0:
+        return sig, labels
     n_frames_shift = int(rng.integers(-max_frames, max_frames + 1))
     if n_frames_shift == 0:
         return sig, labels

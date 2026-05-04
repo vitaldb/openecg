@@ -112,7 +112,11 @@ class BoundaryMaskedDataset(Dataset):
 
 
 class LUDBFrameDatasetAugmented(LUDBFrameDataset):
-    """Same data, with training-time augmentation: gaussian noise + time shift + amplitude scaling."""
+    """Legacy LUDB-only augmentation.
+
+    Kept for old v1.1 experiments. Time shift is edge-filled and frame-aligned
+    so ECG events do not wrap around the 10s window.
+    """
 
     def __init__(self, record_ids, noise_sigma=0.05, max_shift=20, amp_scale_range=0.2, seed=None):
         super().__init__(record_ids)
@@ -126,13 +130,13 @@ class LUDBFrameDatasetAugmented(LUDBFrameDataset):
         sig_np = sig.numpy()
         labels_np = labels.numpy()
 
-        # Time shift (samples at 250Hz; labels at 50Hz so shift by samples//5)
-        shift = int(self.rng.integers(-self.max_shift, self.max_shift + 1))
-        if shift != 0:
-            sig_np = np.roll(sig_np, shift)
-            label_shift = shift // 5  # 5 samples = 1 frame at 50Hz
-            if label_shift != 0:
-                labels_np = np.roll(labels_np, label_shift)
+        if self.max_shift > 0:
+            from ecgcode.stage2.augment import time_shift_aligned
+            max_shift_ms = int(round(self.max_shift * 1000.0 / FS_INPUT))
+            sig_np, labels_np = time_shift_aligned(
+                sig_np, labels_np, fs_sig=FS_INPUT, frame_ms=FRAME_MS,
+                max_shift_ms=max_shift_ms, rng=self.rng,
+            )
 
         # Amplitude scaling
         amp_scale = 1.0 + float(self.rng.uniform(-self.amp_scale_range, self.amp_scale_range))

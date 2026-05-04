@@ -28,7 +28,8 @@ import torch
 
 from ecgcode import eval as ee, isp, ludb, qtdb
 from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.infer import post_process_frames, predict_frames
+from ecgcode.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
+from ecgcode.stage2.infer import extract_boundaries, post_process_frames, predict_frames
 from ecgcode.stage2.model import FrameClassifier
 from ecgcode.stage2.train import load_checkpoint
 
@@ -38,12 +39,7 @@ WINDOW_SAMPLES_250 = 2500
 WINDOW_FRAMES = 500
 FRAME_MS = 20
 
-# Martinez-style per-boundary tolerances (ms)
-TOL_PER_BOUNDARY = {
-    "p_on": 50, "p_off": 50,
-    "qrs_on": 40, "qrs_off": 40,
-    "t_on": 50, "t_off": 100,
-}
+TOL_PER_BOUNDARY = MARTINEZ_TOLERANCE_MS
 
 
 def _normalize(sig):
@@ -79,7 +75,7 @@ def _extract_boundaries(super_frames, fs=250, frame_ms=FRAME_MS):
     return dict(out)
 
 
-def signed_boundary_metrics(pred, true, tol_ms, fs=250):
+def _legacy_signed_boundary_metrics(pred, true, tol_ms, fs=250):
     """Compute signed mean ± SD error (literature standard) plus F1/Se/PPV.
 
     Greedy nearest-match: for each true boundary, find nearest unmatched
@@ -132,7 +128,7 @@ def evaluate_ludb(model, device):
             if len(sig_250) < WINDOW_SAMPLES_250: continue
             pred_raw = predict_frames(model, sig_250, lead_idx, device=device)
             pp = post_process_frames(pred_raw, frame_ms=FRAME_MS)
-            for k, v in _extract_boundaries(pp, fs=250).items():
+            for k, v in extract_boundaries(pp, fs=250).items():
                 bp[k].extend(int(x) + cum for x in v)
             try:
                 gt_ann = ludb.load_annotations(rid, lead)
@@ -170,7 +166,7 @@ def evaluate_isp(model, device):
                 sig_n = sig_n[:WINDOW_SAMPLES_250]
                 pred_raw = predict_frames(model, sig_n, lead_idx, device=device)
                 pp = post_process_frames(pred_raw, frame_ms=FRAME_MS)
-                for k, v in _extract_boundaries(pp, fs=250).items():
+                for k, v in extract_boundaries(pp, fs=250).items():
                     bp[k].extend(int(x) + cum for x in v)
                 for k, v in ann_super.items():
                     if k.endswith("_on") or k.endswith("_off"):
@@ -218,7 +214,7 @@ def evaluate_qtdb_t_subset(model, device):
             sig_n = _normalize(sig)
             pred_raw = predict_frames(model, sig_n, lead_id=1, device=device)
             pp = post_process_frames(pred_raw, frame_ms=FRAME_MS)
-            for k, v in _extract_boundaries(pp, fs=250).items():
+            for k, v in extract_boundaries(pp, fs=250).items():
                 bp[k].extend(int(x) + cum for x in v)
             win_ann = {k: [s - start for s in v if start <= s < end] for k, v in ann.items()}
             for k in TOL_PER_BOUNDARY:
@@ -270,7 +266,7 @@ def report_table(model_name, db_label, sota_key, bp, bt):
     out = {}
     for k in ("p_on", "qrs_on", "t_on", "p_off", "qrs_off", "t_off"):
         tol = TOL_PER_BOUNDARY[k]
-        m = signed_boundary_metrics(bp.get(k, []), bt.get(k, []), tol_ms=tol)
+        m = signed_boundary_metrics(bp.get(k, []), bt.get(k, []), tolerance_ms=tol)
         out[k] = m
         sota = SOTA.get(sota_key, {}).get(k, {})
         ref_se = sota.get("se"); ref_ppv = sota.get("ppv")

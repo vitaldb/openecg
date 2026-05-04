@@ -27,6 +27,7 @@ from torch.utils.data import DataLoader
 
 from ecgcode import eval as ee, isp, ludb, qtdb
 from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from ecgcode.stage2.evaluate import boundary_metrics_by_key
 from ecgcode.stage2.infer import post_process_frames, predict_frames
 from ecgcode.stage2.model import FrameClassifier
 from ecgcode.stage2.multi_dataset import CombinedFrameDataset
@@ -80,21 +81,22 @@ def _extract_boundaries(super_frames, fs, frame_ms=FRAME_MS):
 def boundary_summary(boundary_pred, boundary_true, fs, tol_ms=TOL_MS):
     """For each boundary type, return F1, sens, PPV, mean/std/median error ms."""
     keys = ("p_on", "qrs_on", "t_on", "p_off", "qrs_off", "t_off")
-    out = {}
-    for k in keys:
-        m = ee.boundary_f1(boundary_pred.get(k, []), boundary_true.get(k, []),
-                           tolerance_ms=tol_ms, fs=fs)
-        # Need std too: re-call boundary_error and compute manually
-        be = ee.boundary_error(boundary_pred.get(k, []), boundary_true.get(k, []),
-                               tolerance_ms=tol_ms, fs=fs)
-        out[k] = {
-            "f1": m["f1"], "sensitivity": m["sensitivity"], "ppv": m["ppv"],
-            "n_true": be["n_true"], "n_pred": be["n_pred"], "n_hits": be["n_hits"],
-            "mean_error_ms": be["mean_error_ms"],
-            "median_error_ms": be["median_error_ms"],
-            "p95_error_ms": be["p95_error_ms"],
+    signed = boundary_metrics_by_key(
+        boundary_pred,
+        boundary_true,
+        tolerances_ms={k: tol_ms for k in keys},
+        fs=fs,
+    )
+    return {
+        k: {
+            "f1": m["f1"], "sensitivity": m["sens"], "ppv": m["ppv"],
+            "n_true": m["n_true"], "n_pred": m["n_pred"], "n_hits": m["n_hits"],
+            "mean_error_ms": m["mean_abs_ms"],
+            "median_error_ms": m["median_abs_ms"],
+            "p95_error_ms": m["p95_abs_ms"],
         }
-    return out
+        for k, m in signed.items()
+    }
 
 
 @torch.no_grad()

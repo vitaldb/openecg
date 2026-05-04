@@ -6,19 +6,68 @@ import torch
 
 from ecgcode import codec
 from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import load_checkpoint
+from ecgcode.stage2.train import load_checkpoint, load_checkpoint_blob
+
+
+def infer_model_config_from_state_dict(state_dict):
+    """Infer FrameClassifier kwargs from a checkpoint state dict."""
+    d_model = int(state_dict["conv2.weight"].shape[0])
+    n_classes = int(state_dict["head.weight"].shape[0])
+    n_leads = 12
+    use_lead_emb = "lead_emb.weight" in state_dict
+    if use_lead_emb:
+        n_leads = int(state_dict["lead_emb.weight"].shape[0])
+
+    layer_prefixes = {
+        key.split(".layers.")[1].split(".")[0]
+        for key in state_dict
+        if key.startswith("transformer.layers.")
+    }
+    n_layers = len(layer_prefixes)
+    ff = int(state_dict["transformer.layers.0.linear1.weight"].shape[0])
+    return {
+        "n_leads": n_leads,
+        "d_model": d_model,
+        "n_layers": n_layers,
+        "ff": ff,
+        "n_classes": n_classes,
+        "use_lead_emb": use_lead_emb,
+    }
 
 
 def load_model(ckpt_path, device="cuda", **model_kwargs):
     """Load a checkpoint into a FrameClassifier.
 
-    Pass the same model hyperparameters as used at training time (e.g.
-    `d_model=128, n_layers=8` for the v3 checkpoint).
+    If the checkpoint contains `model_config`, kwargs are optional. Explicit
+    kwargs override the checkpoint config for backward compatibility.
     """
-    model = FrameClassifier(**model_kwargs)
+    if model_kwargs:
+        config = model_kwargs
+    else:
+        blob = load_checkpoint_blob(ckpt_path)
+        config = blob.get("model_config") or infer_model_config_from_state_dict(blob["model_state"])
+    model = FrameClassifier(**config)
     load_checkpoint(ckpt_path, model)
     model = model.to(device).eval()
     return model
+
+
+def load_model_bundle(ckpt_path, device="cuda", **model_kwargs):
+    """Load model plus self-describing inference metadata."""
+    blob = load_checkpoint_blob(ckpt_path)
+    config = model_kwargs or blob.get("model_config") or infer_model_config_from_state_dict(blob["model_state"])
+    model = FrameClassifier(**config)
+    model.load_state_dict(blob["model_state"])
+    model = model.to(device).eval()
+    return {
+        "model": model,
+        "metrics": blob.get("metrics", {}),
+        "model_config": config,
+        "postprocess_config": blob.get("postprocess_config", {}),
+        "boundary_shift_ms": blob.get("boundary_shift_ms", {}),
+        "train_config": blob.get("config", {}),
+        "extra": blob.get("extra", {}),
+    }
 
 
 @torch.no_grad()
@@ -35,6 +84,36 @@ def predict_to_events(model, sig, lead_id, device="cuda", frame_ms=20):
     """Single-sequence inference to RLE events (for boundary extraction)."""
     frames = predict_frames(model, sig, lead_id, device=device)
     return codec.from_frames(frames, frame_ms=frame_ms)
+
+
+def predict_to_boundaries(
+    model,
+    sig,
+    lead_id,
+    device="cuda",
+    fs=250,
+    frame_ms=20,
+    postprocess=True,
+    postprocess_kwargs=None,
+    boundary_shift_ms=None,
+    refine=False,
+    refine_kwargs=None,
+):
+    """Single-sequence inference to boundary sample indices.
+
+    Set `refine=True` to apply the optional Stage 3 signal-aware refiner after
+    frame post-processing and fixed boundary shifts.
+    """
+    frames = predict_frames(model, sig, lead_id, device=device)
+    if postprocess:
+        frames = post_process_frames(frames, frame_ms=frame_ms, **(postprocess_kwargs or {}))
+    boundaries = extract_boundaries(
+        frames, fs=fs, frame_ms=frame_ms, boundary_shift_ms=boundary_shift_ms
+    )
+    if refine:
+        from ecgcode.stage2.refiner import refine_boundaries
+        boundaries = refine_boundaries(sig, boundaries, fs=fs, **(refine_kwargs or {}))
+    return boundaries
 
 
 def extract_boundaries(frames, fs=250, frame_ms=20, boundary_shift_ms=None):
