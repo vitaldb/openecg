@@ -131,6 +131,16 @@ Per-checkpoint shifts now in `ecgcode/stage2/infer.py`: `BOUNDARY_SHIFT_C = {"p_
 
 Signal-aware trim was less effective because P-wave's gradual return to baseline isn't crisply distinguishable from baseline noise at the std level. The bias is the model learning to extend P inclusively — fixing it via a learned p_off head (Stage 3 boundary refinement) is the principled path; the shift is a deployment workaround.
 
+### Stage 2 v4 — model capacity scan (`scripts/train_v4_bigger.py`)
+
+| Model | params | LUDB val avg Martinez F1 | ISP test avg F1 |
+|---|---|---|---|
+| **C (d=128/L=8, current v4)** | **1.08M** | **0.779** | **0.922** |
+| Cbig d=192/L=10 | 2.51M | 0.780 (+0.001) | 0.919 (-0.003) |
+| Cbig d=256/L=8 | 3.21M | 0.783 (+0.004) | 0.918 (-0.004) |
+
+3× more parameters yields essentially zero improvement on LUDB val (+0.004 within noise) and a slight decrease on ISP test. **LUDB train scale (1908 sequences) is the bottleneck, not model capacity.** Closing the remaining ~7-14pp Se gap to DENS-ECG SOTA needs more data, not more parameters: Stage 4 SSL pretraining (Icentia 11k / MIMIC-IV / SNUH per PLAN.md), augmentation re-test now that ISP labels are clean, or a Stage 3 learned boundary refinement head. Keep C at d=128/L=8 as the operating point.
+
 ### Stage 2 v3 investigation — QTDB label sparsity
 
 **QTDB T-wave F1 ≈0.49 was a label-sparsity artifact** (`scripts/eval_qtdb_t_annotated.py`): q1c annotates QRS+P on essentially every examined beat but T on only ~half. Per-record windowed T:QRS ratio: median **0.00**, mean 0.45 (only 39 of 105 records have ratio ≥ 0.8). The model correctly predicts T at every beat but unannotated beats become FP. Re-evaluating only on the 39-record T-annotated subset:
