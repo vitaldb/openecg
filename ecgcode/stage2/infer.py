@@ -37,33 +37,85 @@ def predict_to_events(model, sig, lead_id, device="cuda", frame_ms=20):
     return codec.from_frames(frames, frame_ms=frame_ms)
 
 
-def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=200):
+def extract_boundaries(frames, fs=250, frame_ms=20, boundary_shift_ms=None):
+    """Extract per-wave boundary sample indices from a per-frame supercategory array.
+
+    Returns dict: {p_on, p_off, qrs_on, qrs_off, t_on, t_off} -> list[int sample idx].
+
+    boundary_shift_ms: optional dict with keys like {"p_off": -22} to apply a
+    fixed shift in ms to specific boundaries. The v4 C checkpoint has a +22ms
+    p_off systematic bias on LUDB val and +20ms on ISP test (model predicts P
+    offset late vs cardiologist annotation); recommended shift = {"p_off": -22}.
+    F (LUDB-only) has a smaller +14ms p_off bias; recommended shift = {"p_off": -15}.
+    See `scripts/fix_p_off_bias.py` for the bias measurements per checkpoint.
+    """
+    import numpy as _np
+    out = {"p_on": [], "p_off": [], "qrs_on": [], "qrs_off": [], "t_on": [], "t_off": []}
+    super_to_name = {1: "p", 2: "qrs", 3: "t"}  # SUPER_P, SUPER_QRS, SUPER_T
+    spf = int(round(frame_ms * fs / 1000.0))
+    shifts = boundary_shift_ms or {}
+    shift_samples = {k: int(round(v * fs / 1000.0)) for k, v in shifts.items()}
+    prev = 0
+    for f_idx, cur in enumerate(frames):
+        cur = int(cur)
+        if cur != prev:
+            sample = f_idx * spf
+            if prev in super_to_name:
+                key = f"{super_to_name[prev]}_off"
+                out[key].append(int(sample - 1 + shift_samples.get(key, 0)))
+            if cur in super_to_name:
+                key = f"{super_to_name[cur]}_on"
+                out[key].append(int(sample + shift_samples.get(key, 0)))
+        prev = cur
+    if prev in super_to_name:
+        sample = len(frames) * spf
+        key = f"{super_to_name[prev]}_off"
+        out[key].append(int(sample - 1 + shift_samples.get(key, 0)))
+    return out
+
+
+# Recommended per-checkpoint boundary shifts (measured on LUDB val + ISP test)
+# Use with `extract_boundaries(..., boundary_shift_ms=BOUNDARY_SHIFT_C)`.
+BOUNDARY_SHIFT_C = {"p_off": -22}  # C (combined big +lead_emb): +22ms p_off bias
+BOUNDARY_SHIFT_F = {"p_off": -15}  # F (LUDB only no_lead_emb): +14ms p_off bias
+
+
+def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=200,
+                        per_class_min_ms=None, per_class_merge_ms=None):
     """Apply post-processing to per-frame supercategory array.
 
     1. Remove segments shorter than min_duration_ms (replace with previous-segment label).
     2. Merge same-class segments separated by a gap shorter than merge_gap_ms.
 
-    Defaults tuned via `scripts/tune_postproc_v4.py` on LUDB val (24-combo grid):
-    (60, 200) gives best avg boundary F1 across both C (combined) and F (LUDB-only)
-    checkpoints. F gains ~+0.022 avg, C gains ~+0.010 avg vs the previous (40, 300)
-    defaults. Per-class optima vary (QRS prefers smaller min, P/T prefer larger),
-    but (60, 200) is a robust single-default compromise.
+    Per-class overrides: pass dicts keyed by class id (1=P, 2=QRS, 3=T) to use
+    different thresholds per wave type. Class id 0 (other) does not merge. Tune
+    sweep on LUDB val (`scripts/tune_postproc_v4.py`) found per-class optima:
+    QRS=(min~20-40, merge~100), P/T=(min~60, merge~100-300). Single-default
+    (60, 200) gives +0.01 avg boundary F1 vs old (40, 300); per-class can give
+    further +0.005-0.015.
     """
     if len(frames) == 0:
         return np.asarray(frames, dtype=np.uint8)
     arr = np.asarray(frames, dtype=np.uint8).copy()
-    min_frames = max(1, int(min_duration_ms / frame_ms))
-    merge_frames = max(1, int(merge_gap_ms / frame_ms))
     n = len(arr)
 
+    def class_min_frames(cls):
+        ms = (per_class_min_ms or {}).get(int(cls), min_duration_ms)
+        return max(1, int(ms / frame_ms))
+
+    def class_merge_frames(cls):
+        ms = (per_class_merge_ms or {}).get(int(cls), merge_gap_ms)
+        return max(1, int(ms / frame_ms))
+
     # Step 1: remove short segments (absorb into previous segment if possible).
+    # Threshold depends on the segment's own class.
     i = 0
     while i < n:
         j = i
         while j < n and arr[j] == arr[i]:
             j += 1
         seg_len = j - i
-        if seg_len < min_frames and i > 0:
+        if seg_len < class_min_frames(arr[i]) and i > 0:
             arr[i:j] = arr[i - 1]
         i = j
 
@@ -81,6 +133,7 @@ def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=20
         if cls == 0:
             i = j
             continue
+        merge_frames = class_merge_frames(cls)
         # Look ahead for next occurrence of same class within merge_frames.
         k = j
         while k < n and (k - j) < merge_frames and arr[k] != cls:
