@@ -14,6 +14,11 @@ SUPER_QRS = 2
 SUPER_T = 3
 SUPER_NAMES = {SUPER_OTHER: "other", SUPER_P: "P", SUPER_QRS: "QRS", SUPER_T: "T"}
 
+# Sentinel for masked frames (boundary regions where the model has one-sided
+# context and predictions are unreliable). PyTorch cross_entropy supports
+# `ignore_index` natively; our focal_cross_entropy does too.
+IGNORE_INDEX = 255
+
 _SUPER_MAP = {
     vocab.ID_PAD: SUPER_OTHER,
     vocab.ID_UNK: SUPER_OTHER,
@@ -42,8 +47,14 @@ def to_supercategory(frames: np.ndarray) -> np.ndarray:
 def frame_f1(pred: np.ndarray, true: np.ndarray) -> dict:
     """Per-supercategory precision/recall/F1.
 
+    Frames where `true == IGNORE_INDEX` are excluded from all counts (TP/FP/FN).
+    Pred values at those positions are also ignored regardless of their value.
+
     Returns: {super_id: {'precision': p, 'recall': r, 'f1': f, 'tp', 'fp', 'fn'}}
     """
+    valid = true != IGNORE_INDEX
+    pred = pred[valid]
+    true = true[valid]
     out = {}
     for sc in (SUPER_OTHER, SUPER_P, SUPER_QRS, SUPER_T):
         tp = int(np.sum((pred == sc) & (true == sc)))

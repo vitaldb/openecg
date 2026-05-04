@@ -73,6 +73,44 @@ def compute_class_weights(counts):
     return weights.astype(np.float64)
 
 
+class BoundaryMaskedDataset(Dataset):
+    """Wrapper that masks the first/last `mask_frames` of each sequence's
+    labels with `ignore_index`. The model's transformer attention can only see
+    the 10s window, so boundary frames have one-sided context and unreliable
+    predictions; masking them removes that noise from the training signal.
+
+    Default: mask 100 frames each side (= 2s @ 50Hz frame rate, 20% of window).
+    Loss must use `ignore_index=ee.IGNORE_INDEX` (=255). Eval should skip the
+    same boundary regions when extracting predicted boundaries.
+    """
+
+    def __init__(self, base, mask_frames=100, ignore_index=None):
+        from ecgcode import eval as ee
+        self.base = base
+        self.mask_frames = int(mask_frames)
+        self.ignore_index = ee.IGNORE_INDEX if ignore_index is None else int(ignore_index)
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        sig, lead_id, labels = self.base[idx]
+        if self.mask_frames > 0:
+            labels = labels.clone()
+            labels[:self.mask_frames] = self.ignore_index
+            labels[-self.mask_frames:] = self.ignore_index
+        return sig, lead_id, labels
+
+    def label_counts(self):
+        # Underlying base dataset's class counts (don't subtract masked frames;
+        # class weights remain stable across mask choices).
+        return self.base.label_counts()
+
+    @property
+    def items(self):
+        return self.base.items
+
+
 class LUDBFrameDatasetAugmented(LUDBFrameDataset):
     """Same data, with training-time augmentation: gaussian noise + time shift + amplitude scaling."""
 

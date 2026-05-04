@@ -232,3 +232,223 @@ class CombinedFrameDatasetAugmented(CombinedFrameDataset):
             lead_idx,
             labels,
         )
+
+
+class QTDBSlidingDataset(Dataset):
+    """QTDB-only dataset with sliding window + pre-cached time stretch.
+
+    Loads each q1c-annotated record's full 15-min signal once. Pre-computes
+    resampled signals at a fixed set of stretch factors (default
+    {0.9, 1.0, 1.1, 1.2}) so __getitem__ is fast: pick a random factor + slide
+    a 10s window. Labels are computed on-the-fly from cached resampled
+    annotation positions (cheap).
+
+    Why pre-cache: scipy.signal.resample on 225000 samples takes ~150ms per
+    call; doing it on every __getitem__ stalls the data loader. With caching,
+    __getitem__ is a slice + label-build operation (~5ms).
+
+    Memory: ~3 leads/record × 4 factors × 225000 samples × 4 bytes per record
+    = ~10 MB per record × 33 records = ~330 MB total.
+
+    Compression (f<1.0) is safe because we slide within the longer original
+    signal — no padding artifacts. Only window positions that overlap the
+    annotated span (with `margin_samples` minimum overlap) are sampled;
+    positions outside annotations get IGNORE_INDEX in labels (excluded from
+    loss / metrics).
+    """
+
+    def __init__(self, fs=250, scale_factors=(0.9, 1.0, 1.1, 1.2),
+                 windows_per_record=20, margin_samples=1000, seed=42):
+        import scipy.signal as scipy_signal
+        self.fs = fs
+        self.scale_factors = tuple(scale_factors)
+        self.windows_per_record = windows_per_record
+        self.margin_samples = margin_samples
+        self.rng = np.random.default_rng(seed)
+        self.records = []
+        n_skipped = 0
+        for rid in qtdb.records_with_q1c():
+            try:
+                rec = qtdb.load_record(rid)
+                ann = qtdb.load_q1c(rid)
+            except Exception:
+                continue
+            all_pos = []
+            for k in ("p_on", "p_off", "qrs_on", "qrs_off", "t_on", "t_off"):
+                all_pos.extend(ann[k])
+            if not all_pos:
+                continue
+            ann_min = min(all_pos)
+            ann_max = max(all_pos)
+            mappable = []
+            for lead_name, sig in rec.items():
+                if lead_name in QTDB_LEAD_TO_LUDB_ID:
+                    mappable.append((lead_name, QTDB_LEAD_TO_LUDB_ID[lead_name], sig))
+                else:
+                    n_skipped += 1
+            if not mappable:
+                continue
+            n_orig = len(mappable[0][2])
+            # Pre-resample each lead at each scale factor + cache adjusted ann positions
+            cache = {}
+            for f in self.scale_factors:
+                if abs(f - 1.0) < 1e-6:
+                    n_new = n_orig
+                else:
+                    n_new = int(round(n_orig * f))
+                lead_sigs = {}
+                for lead_name, lead_idx, sig in mappable:
+                    if abs(f - 1.0) < 1e-6:
+                        lead_sigs[lead_name] = sig.astype(np.float32)
+                    else:
+                        lead_sigs[lead_name] = scipy_signal.resample(sig, n_new).astype(np.float32)
+                ann_r = {k: [int(round(v * n_new / n_orig)) for v in vals]
+                         for k, vals in ann.items()}
+                ann_min_r = int(round(ann_min * n_new / n_orig))
+                ann_max_r = int(round(ann_max * n_new / n_orig))
+                cache[f] = {"n": n_new, "leads": lead_sigs,
+                            "ann": ann_r, "ann_min": ann_min_r, "ann_max": ann_max_r}
+            self.records.append({"rid": rid, "leads": mappable, "cache": cache})
+        print(f"QTDBSliding: loaded {len(self.records)} records "
+              f"({sum(len(r['leads']) for r in self.records)} record-lead pairs) "
+              f"with {len(self.scale_factors)} pre-resampled stretch factors, "
+              f"skipped {n_skipped} unmappable lead instances")
+
+    def __len__(self):
+        return sum(len(r["leads"]) for r in self.records) * self.windows_per_record
+
+    def label_counts(self):
+        """Approximate per-class frame counts based on annotation density.
+        Use the f=1.0 cache (original sampling) for the estimate."""
+        counts = np.zeros(N_CLASSES, dtype=np.int64)
+        for r in self.records:
+            cache = r["cache"].get(1.0) or next(iter(r["cache"].values()))
+            ann = cache["ann"]
+            n_p = len(ann.get("p_on", []))
+            n_q = len(ann.get("qrs_on", []))
+            n_t = len(ann.get("t_on", []))
+            counts[ee.SUPER_P] += n_p * 30  # approx wave width in samples
+            counts[ee.SUPER_QRS] += n_q * 30
+            counts[ee.SUPER_T] += n_t * 30
+            ann_span = max(0, cache["ann_max"] - cache["ann_min"])
+            counts[ee.SUPER_OTHER] += max(0, ann_span - (n_p + n_q + n_t) * 30)
+        return np.maximum(counts, 1)
+
+    def _build_window(self, record_entry, lead_entry):
+        lead_name, lead_idx, _ = lead_entry
+        # Pick a pre-cached scale factor uniformly at random
+        f = float(self.rng.choice(self.scale_factors))
+        cache_f = record_entry["cache"][f]
+        n_new = cache_f["n"]
+        sig_resampled = cache_f["leads"][lead_name]
+        ann_r = cache_f["ann"]
+        ann_min_r = cache_f["ann_min"]
+        ann_max_r = cache_f["ann_max"]
+
+        # Pick window such that it contains at least margin samples of annotated region
+        margin = self.margin_samples
+        win_start_min = max(0, ann_min_r - WINDOW_SAMPLES + margin)
+        win_start_max = min(n_new - WINDOW_SAMPLES, ann_max_r - margin)
+        if win_start_max < win_start_min:
+            win_start = max(0, min(n_new - WINDOW_SAMPLES,
+                                    (ann_min_r + ann_max_r) // 2 - WINDOW_SAMPLES // 2))
+        else:
+            win_start = int(self.rng.integers(win_start_min, win_start_max + 1))
+        win_end = win_start + WINDOW_SAMPLES
+
+        sig_win = sig_resampled[win_start:win_end].astype(np.float32)
+        sig_win = ((sig_win - sig_win.mean()) / (sig_win.std() + 1e-6)).astype(np.float32)
+
+        # Build sample-level labels: IGNORE outside annotated span, OTHER inside, then per-wave
+        sample_labels = np.full(WINDOW_SAMPLES, ee.IGNORE_INDEX, dtype=np.int64)
+        local_ann_lo = max(0, ann_min_r - win_start)
+        local_ann_hi = min(WINDOW_SAMPLES, ann_max_r - win_start + 1)
+        if local_ann_hi > local_ann_lo:
+            sample_labels[local_ann_lo:local_ann_hi] = ee.SUPER_OTHER
+        for cls_id, on_key, off_key in [(ee.SUPER_P, "p_on", "p_off"),
+                                         (ee.SUPER_QRS, "qrs_on", "qrs_off"),
+                                         (ee.SUPER_T, "t_on", "t_off")]:
+            for on, off in zip(ann_r[on_key], ann_r[off_key]):
+                if on >= win_end or off < win_start:
+                    continue
+                lo = max(0, on - win_start)
+                hi = min(WINDOW_SAMPLES, off + 1 - win_start)
+                if hi > lo:
+                    sample_labels[lo:hi] = cls_id
+
+        # Frame-level labels (50Hz, 500 frames)
+        spf = WINDOW_SAMPLES // WINDOW_FRAMES  # 5
+        frame_labels = np.zeros(WINDOW_FRAMES, dtype=np.int64)
+        for fi in range(WINDOW_FRAMES):
+            seg = sample_labels[fi * spf:(fi + 1) * spf]
+            valid = seg[seg != ee.IGNORE_INDEX]
+            if len(valid) == 0:
+                frame_labels[fi] = ee.IGNORE_INDEX
+            else:
+                vals, counts = np.unique(valid, return_counts=True)
+                frame_labels[fi] = int(vals[np.argmax(counts)])
+        return sig_win, lead_idx, frame_labels
+
+    def __getitem__(self, idx):
+        # Map flat idx -> (record_idx, lead_idx_within_record, window_idx)
+        # We don't really need the window_idx since each call samples randomly,
+        # but we use it to ensure each idx maps to one record-lead pair.
+        n_lead_pairs = sum(len(r["leads"]) for r in self.records)
+        flat = idx % (n_lead_pairs * self.windows_per_record)
+        pair_idx = flat // self.windows_per_record
+        # Find which record this pair_idx belongs to
+        cur = 0
+        chosen_rec = None
+        chosen_lead = None
+        for r in self.records:
+            if pair_idx < cur + len(r["leads"]):
+                chosen_rec = r
+                chosen_lead = r["leads"][pair_idx - cur]
+                break
+            cur += len(r["leads"])
+        sig_win, lead_idx, frame_labels = self._build_window(chosen_rec, chosen_lead)
+        return (torch.from_numpy(sig_win),
+                torch.tensor(lead_idx, dtype=torch.long),
+                torch.from_numpy(frame_labels))
+
+
+class CombinedFrameDatasetTimeAugmented(CombinedFrameDataset):
+    """Combined dataset with TIME-AXIS augmentation (shift + stretch) plus
+    optional signal-domain noise. Signal AND labels are transformed together
+    so alignment is preserved. Time shift is in integer-frame units (no
+    quantization error); time stretch uses Fourier resample for the signal
+    and nearest-neighbor for labels, with center-crop/pad to keep window size.
+
+    This addresses the LUDB data scale bottleneck by simulating different heart
+    rates and beat phases — fundamentally more informative than signal-only
+    noise (which was tested in CombinedFrameDatasetAugmented and found to hurt).
+    """
+
+    def __init__(self, sources, max_shift_ms=200, scale_range=(1.0, 1.2),
+                 p_shift=0.5, p_stretch=0.5, n_ops_signal=0, seed=42):
+        super().__init__(sources)
+        self.max_shift_ms = max_shift_ms
+        self.scale_range = scale_range
+        self.p_shift = p_shift
+        self.p_stretch = p_stretch
+        self.n_ops_signal = n_ops_signal
+        self.rng = np.random.default_rng(seed)
+
+    def __getitem__(self, idx):
+        from ecgcode.stage2.augment import randaugment_ecg, time_axis_augment
+        sig, lead_idx, labels = super().__getitem__(idx)
+        sig_np = sig.numpy()
+        labels_np = labels.numpy()
+        sig_np, labels_np = time_axis_augment(
+            sig_np, labels_np,
+            p_shift=self.p_shift, p_stretch=self.p_stretch,
+            max_shift_ms=self.max_shift_ms, scale_range=self.scale_range,
+            rng=self.rng,
+        )
+        if self.n_ops_signal > 0:
+            sig_np = randaugment_ecg(sig_np, fs=250, n_ops=self.n_ops_signal, rng=self.rng)
+        return (
+            torch.from_numpy(sig_np.astype(np.float32)),
+            lead_idx,
+            torch.from_numpy(labels_np.astype(np.int64)),
+        )

@@ -22,24 +22,31 @@ class TrainConfig:
     seed: int = 42
 
 
-def focal_cross_entropy(logits, target, weight=None, gamma=2.0):
-    """Focal cross-entropy loss for class imbalance.
+def focal_cross_entropy(logits, target, weight=None, gamma=2.0, ignore_index=255):
+    """Focal cross-entropy loss for class imbalance, with ignore_index support.
 
     logits: [B, C, ...] (already permuted so class axis is dim=1)
-    target: [B, ...] integer class labels
+    target: [B, ...] integer class labels (ignore_index frames excluded from loss)
     weight: optional per-class weight tensor of shape [C]
     gamma: focusing parameter (paper recommends 2.0)
     """
     log_probs = nn.functional.log_softmax(logits, dim=1)
     probs = log_probs.exp()
-    nll = nn.functional.nll_loss(log_probs, target, weight=weight, reduction="none")
-    pt = probs.gather(1, target.unsqueeze(1)).squeeze(1).clamp(min=1e-8)
+    valid = target != ignore_index
+    if not valid.any():
+        return logits.sum() * 0.0  # safe zero gradient
+    # Replace ignored frames with class 0 to avoid index errors; we'll mask out below.
+    safe_target = target.clone()
+    safe_target[~valid] = 0
+    nll = nn.functional.nll_loss(log_probs, safe_target, weight=weight, reduction="none")
+    pt = probs.gather(1, safe_target.unsqueeze(1)).squeeze(1).clamp(min=1e-8)
     focal_factor = (1.0 - pt).pow(gamma)
-    return (focal_factor * nll).mean()
+    per_frame = focal_factor * nll
+    return per_frame[valid].mean()
 
 
 def train_one_epoch(model, loader, optimizer, class_weights, device,
-                    use_focal=True, focal_gamma=2.0):
+                    use_focal=True, focal_gamma=2.0, ignore_index=255):
     model.train()
     weights = class_weights.to(device)
     total_loss = 0.0
@@ -52,10 +59,12 @@ def train_one_epoch(model, loader, optimizer, class_weights, device,
         if use_focal:
             loss = focal_cross_entropy(
                 logits.transpose(1, 2), labels, weight=weights, gamma=focal_gamma,
+                ignore_index=ignore_index,
             )
         else:
             loss = nn.functional.cross_entropy(
                 logits.transpose(1, 2), labels, weight=weights,
+                ignore_index=ignore_index,
             )
         optimizer.zero_grad()
         loss.backward()
