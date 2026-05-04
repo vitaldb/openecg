@@ -38,7 +38,8 @@ def focal_cross_entropy(logits, target, weight=None, gamma=2.0):
     return (focal_factor * nll).mean()
 
 
-def train_one_epoch(model, loader, optimizer, class_weights, device, gamma=2.0):
+def train_one_epoch(model, loader, optimizer, class_weights, device,
+                    use_focal=True, focal_gamma=2.0):
     model.train()
     weights = class_weights.to(device)
     total_loss = 0.0
@@ -48,9 +49,14 @@ def train_one_epoch(model, loader, optimizer, class_weights, device, gamma=2.0):
         leads = leads.to(device)
         labels = labels.to(device)
         logits = model(sigs, leads)
-        loss = focal_cross_entropy(
-            logits.transpose(1, 2), labels, weight=weights, gamma=gamma,
-        )
+        if use_focal:
+            loss = focal_cross_entropy(
+                logits.transpose(1, 2), labels, weight=weights, gamma=focal_gamma,
+            )
+        else:
+            loss = nn.functional.cross_entropy(
+                logits.transpose(1, 2), labels, weight=weights,
+            )
         optimizer.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -96,7 +102,7 @@ def load_checkpoint(path, model):
 
 
 def fit(model, train_loader, val_loader, class_weights, config,
-        device="cuda", ckpt_path=None, log_fn=print):
+        device="cuda", ckpt_path=None, log_fn=print, use_focal=True):
     """Full training: cosine schedule, early stopping on val QRS F1."""
     model = model.to(device)
     optimizer = torch.optim.AdamW(
@@ -118,7 +124,9 @@ def fit(model, train_loader, val_loader, class_weights, config,
     epochs_without_improvement = 0
 
     for epoch in range(config.epochs):
-        train_loss = train_one_epoch(model, train_loader, optimizer, class_weights, device)
+        train_loss = train_one_epoch(
+            model, train_loader, optimizer, class_weights, device, use_focal=use_focal,
+        )
         for _ in range(len(train_loader)):
             scheduler.step()
         val_metrics = run_eval(model, val_loader, device)

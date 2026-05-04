@@ -17,6 +17,23 @@ WINDOW_SAMPLES = 2500       # 10s @ 250Hz
 WINDOW_FRAMES = 500
 N_CLASSES = 4
 
+# QTDB lead names -> LUDB lead-id (LEADS_12 = i, ii, iii, avr, avl, avf, v1..v6).
+# Anything not in this map is skipped to avoid polluting the lead embedding.
+QTDB_LEAD_TO_LUDB_ID = {
+    "I": 0, "i": 0,
+    "MLII": 1, "ML II": 1, "II": 1, "ii": 1,
+    "III": 2, "iii": 2,
+    "aVR": 3, "AVR": 3, "avr": 3,
+    "aVL": 4, "AVL": 4, "avl": 4,
+    "aVF": 5, "AVF": 5, "avf": 5,
+    "V1": 6, "v1": 6,
+    "V2": 7, "v2": 7,
+    "V3": 8, "v3": 8,
+    "V4": 9, "v4": 9,
+    "V5": 10, "v5": 10,
+    "V6": 11, "v6": 11,
+}
+
 
 def _normalize(sig):
     mean = float(sig.mean())
@@ -90,6 +107,8 @@ class CombinedFrameDataset(Dataset):
                 self._add(sig_n, lead_idx, labels, ("ludb", rid, lead))
 
     def _load_qtdb(self):
+        n_loaded = 0
+        n_skipped = 0
         for rid in qtdb.records_with_q1c():
             try:
                 record = qtdb.load_record(rid)
@@ -103,13 +122,8 @@ class CombinedFrameDataset(Dataset):
             if end > 225000:
                 end = 225000
                 start = end - WINDOW_SAMPLES
-            # First lead -> use lead_id=1 (~ ii in LUDB)
-            first_lead = list(record.keys())[0]
-            sig = record[first_lead][start:end]
-            if len(sig) < WINDOW_SAMPLES:
-                continue
-            sig_n = _normalize(sig)
-            # Build per-frame labels for the window
+
+            # Build per-frame labels for the window (independent of lead).
             win_ann = {k: [s - start for s in v if start <= s < end] for k, v in ann.items()}
             n_samples = WINDOW_SAMPLES
             sample_labels = np.full(n_samples, ee.SUPER_OTHER, dtype=np.uint8)
@@ -125,7 +139,21 @@ class CombinedFrameDataset(Dataset):
                 seg = sample_labels[f * samples_per_frame:(f + 1) * samples_per_frame]
                 vals, counts = np.unique(seg, return_counts=True)
                 labels[f] = int(vals[np.argmax(counts)])
-            self._add(sig_n, 1, labels, ("qtdb", rid))   # lead_id=1 default
+
+            # Use ALL leads in the record that map cleanly to a LUDB lead-id.
+            # QTDB records typically have 2 leads (e.g., MLII + V5).
+            for lead_name in record.keys():
+                if lead_name not in QTDB_LEAD_TO_LUDB_ID:
+                    n_skipped += 1
+                    continue
+                lead_idx = QTDB_LEAD_TO_LUDB_ID[lead_name]
+                sig = record[lead_name][start:end]
+                if len(sig) < WINDOW_SAMPLES:
+                    continue
+                sig_n = _normalize(sig)
+                self._add(sig_n, lead_idx, labels.copy(), ("qtdb", rid, lead_name))
+                n_loaded += 1
+        print(f"QTDB: loaded {n_loaded} sequences (skipped {n_skipped} with unmappable leads)")
 
     def _load_isp(self, split: str):
         rec_ids = isp.load_split()[split]
