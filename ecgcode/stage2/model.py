@@ -169,3 +169,41 @@ class FrameClassifierViT(nn.Module):
             h = h + self.lead_emb(lead_id).unsqueeze(1)
         h = self.transformer(h)
         return self.head(h)
+
+
+class FrameClassifierViTReg(FrameClassifierViT):
+    """ViT backbone with parallel classification + boundary-regression heads.
+
+    Forward returns (cls_logits[B, N_patches, n_classes],
+                     reg_offsets[B, N_patches, n_reg]).
+    n_reg defaults to 6: signed sample-offset to nearest GT boundary of each of
+    {p_on, p_off, qrs_on, qrs_off, t_on, t_off}.
+    """
+
+    def __init__(self, n_reg=6, **kwargs):
+        super().__init__(**kwargs)
+        self.n_reg = int(n_reg)
+        self.reg_head = nn.Linear(self.head.in_features, self.n_reg)
+        self.model_config = dict(self.model_config)
+        self.model_config["n_reg"] = self.n_reg
+        self.model_config["arch"] = "vit_reg"
+
+    def forward(self, x, lead_id):
+        B, N = x.shape
+        n_patches = N // self.patch_size
+        if self.conv_stem:
+            h = torch.nn.functional.gelu(self.stem_conv1(x.unsqueeze(1)))
+            h = torch.nn.functional.gelu(self.stem_conv2(h))
+            h = h.transpose(1, 2)
+            patches = h.reshape(B, n_patches, self.patch_size * 32)
+        else:
+            patches = x.view(B, n_patches, self.patch_size)
+        h = self.patch_embed(patches)
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+        h = self.transformer(h)
+        cls_logits = self.head(h)
+        reg_offsets = self.reg_head(h)
+        return cls_logits, reg_offsets

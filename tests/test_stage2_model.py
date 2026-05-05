@@ -48,3 +48,28 @@ def test_softmax_sums_to_1():
     probs = logits.softmax(dim=-1)
     sums = probs.sum(dim=-1)
     assert torch.allclose(sums, torch.ones_like(sums), atol=1e-5)
+
+
+def test_vit_reg_forward_shape_cpu():
+    from ecgcode.stage2.model import FrameClassifierViTReg
+    model = FrameClassifierViTReg(
+        patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
+        use_lead_emb=False, pos_type="learnable",
+    )
+    x = torch.randn(2, 2500)
+    lead_id = torch.zeros(2, dtype=torch.long)
+    cls, reg = model(x, lead_id)
+    assert cls.shape == (2, 500, 4)
+    assert reg.shape == (2, 500, 6)
+    assert cls.dtype == torch.float32
+    assert reg.dtype == torch.float32
+
+
+def test_vit_reg_model_config_records_n_reg():
+    from ecgcode.stage2.model import FrameClassifierViTReg
+    model = FrameClassifierViTReg(
+        patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
+        use_lead_emb=False, pos_type="learnable",
+    )
+    assert model.model_config["n_reg"] == 6
+    assert model.model_config["arch"] == "vit_reg"
