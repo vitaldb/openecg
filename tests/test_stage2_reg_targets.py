@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import torch
 
 from ecgcode import eval as ee
 from ecgcode.stage2.reg_targets import (
@@ -44,3 +45,34 @@ def test_ignore_index_zeros_target_and_mask():
     )
     assert not mask[2].any()
     np.testing.assert_array_equal(targets[2], 0.0)
+
+
+import torch
+
+from ecgcode.stage2.reg_targets import RegLabelDataset
+
+
+class _HardDS:
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, idx):
+        sig = torch.zeros(2500)
+        lead = torch.tensor(idx, dtype=torch.long)
+        labels = torch.tensor([0]*5 + [1]*6 + [0]*489, dtype=torch.long)
+        return sig, lead, labels
+
+    def label_counts(self):
+        return np.array([100, 5, 5, 5], dtype=np.int64)
+
+
+def test_reg_label_dataset_yields_targets_and_mask():
+    base = _HardDS()
+    ds = RegLabelDataset(base, samples_per_frame=5, window_frames=5)
+    sig, lead, labels, target, mask = ds[0]
+    assert sig.shape == (2500,)
+    assert labels.dtype == torch.long
+    assert target.shape == (500, 6)
+    assert mask.shape == (500, 6)
+    assert mask.dtype == torch.bool
+    assert mask.any()

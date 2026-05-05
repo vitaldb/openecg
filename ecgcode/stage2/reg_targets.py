@@ -71,3 +71,35 @@ def boundary_regression_targets(
             mask[f, :] = False
             targets[f, :] = 0.0
     return targets, mask
+
+
+class RegLabelDataset(Dataset):
+    """Wrap a base dataset to additionally yield reg targets + mask.
+
+    Base must yield (sig, lead_id, hard_labels[T]). This wrapper yields
+    (sig, lead_id, hard_labels, reg_targets[T,6], reg_mask[T,6]).
+    """
+
+    def __init__(self, base, samples_per_frame: int = 5,
+                 window_frames: int = 5,
+                 ignore_index: int = ee.IGNORE_INDEX):
+        self.base = base
+        self.samples_per_frame = int(samples_per_frame)
+        self.window_frames = int(window_frames)
+        self.ignore_index = int(ignore_index)
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        sig, lead_id, labels = self.base[idx]
+        labels_np = labels.numpy() if hasattr(labels, "numpy") else np.asarray(labels)
+        targets, mask = boundary_regression_targets(
+            labels_np, samples_per_frame=self.samples_per_frame,
+            window_frames=self.window_frames, ignore_index=self.ignore_index,
+        )
+        return (sig, lead_id, labels,
+                torch.from_numpy(targets), torch.from_numpy(mask))
+
+    def label_counts(self):
+        return self.base.label_counts()

@@ -46,3 +46,37 @@ def test_train_one_epoch_kl_loss_decreases():
         loss = train_one_epoch_kl(model, loader, opt, weights, device="cpu")
         losses.append(loss)
     assert losses[-1] < losses[0] * 0.7
+
+
+def test_boundary_l1_loss_masked():
+    from ecgcode.stage2.train import boundary_l1_loss
+    pred = torch.tensor([[[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]]])
+    target = torch.tensor([[[3.0, 0.0, 0.0, 0.0, 0.0, 0.0]]])
+    mask = torch.tensor([[[True, False, False, False, False, False]]])
+    loss = boundary_l1_loss(pred, target, mask)
+    assert torch.isclose(loss, torch.tensor(2.0))
+
+
+def test_train_one_epoch_reg_loss_decreases():
+    from ecgcode.stage2.model import FrameClassifierViTReg
+    from ecgcode.stage2.train import train_one_epoch_reg
+    torch.manual_seed(0)
+    model = FrameClassifierViTReg(
+        patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
+        use_lead_emb=False, pos_type="learnable",
+    )
+    sigs = torch.randn(4, 2500)
+    leads = torch.zeros(4, dtype=torch.long)
+    labels = torch.zeros(4, 500, dtype=torch.long)
+    reg_t = torch.zeros(4, 500, 6)
+    reg_m = torch.zeros(4, 500, 6, dtype=torch.bool)
+    reg_m[:, 100, 0] = True
+    reg_t[:, 100, 0] = 3.0
+    loader = [(sigs, leads, labels, reg_t, reg_m)]
+    weights = torch.ones(4)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
+    losses = []
+    for _ in range(40):
+        loss = train_one_epoch_reg(model, loader, opt, weights, device="cpu")
+        losses.append(loss)
+    assert losses[-1] < losses[0] * 0.7
