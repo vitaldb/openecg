@@ -22,8 +22,6 @@ from ecgcode.stage2.evaluate import (
     boundary_metrics_by_key,
 )
 from ecgcode.stage2.infer import (
-    BOUNDARY_SHIFT_C,
-    BOUNDARY_SHIFT_F,
     extract_boundaries,
     load_model_bundle,
     post_process_frames,
@@ -39,8 +37,8 @@ FRAME_MS = 20
 
 
 MODEL_SPECS = {
-    "C": {"ckpt": CKPT_DIR / "stage2_v4_C.pt", "shift": BOUNDARY_SHIFT_C},
-    "F": {"ckpt": CKPT_DIR / "stage2_v4_ludb_only.pt", "shift": BOUNDARY_SHIFT_F},
+    "C": {"ckpt": CKPT_DIR / "stage2_v4_C.pt"},
+    "F": {"ckpt": CKPT_DIR / "stage2_v4_ludb_only.pt"},
 }
 
 
@@ -60,17 +58,15 @@ def _add_boundaries(acc, local_boundaries, cum):
         acc[key].extend(int(v) + cum for v in values)
 
 
-def _predict_boundary_pair(model, sig_250, lead_idx, device, shift, refine_kwargs):
+def _predict_boundary_pair(model, sig_250, lead_idx, device, refine_kwargs):
     raw = predict_frames(model, sig_250, lead_idx, device=device)
     frames = post_process_frames(raw, frame_ms=FRAME_MS)
-    base = extract_boundaries(
-        frames, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift,
-    )
+    base = extract_boundaries(frames, fs=250, frame_ms=FRAME_MS)
     refined = refine_boundaries(sig_250, base, fs=250, **refine_kwargs)
     return base, refined
 
 
-def evaluate_ludb(model, device, shift, refine_kwargs):
+def evaluate_ludb(model, device, refine_kwargs):
     ds = LUDBFrameDataset(ludb.load_split()["val"])
     base_pred, refined_pred, true = defaultdict(list), defaultdict(list), defaultdict(list)
     cum = 0
@@ -82,7 +78,7 @@ def evaluate_ludb(model, device, shift, refine_kwargs):
             if len(sig_250) < WINDOW_SAMPLES_250:
                 continue
             base, refined = _predict_boundary_pair(
-                model, sig_250, lead_idx, device, shift, refine_kwargs
+                model, sig_250, lead_idx, device, refine_kwargs
             )
             _add_boundaries(base_pred, base, cum)
             _add_boundaries(refined_pred, refined, cum)
@@ -97,7 +93,7 @@ def evaluate_ludb(model, device, shift, refine_kwargs):
     return base_pred, refined_pred, true, len(ds)
 
 
-def evaluate_isp(model, device, shift, refine_kwargs):
+def evaluate_isp(model, device, refine_kwargs):
     base_pred, refined_pred, true = defaultdict(list), defaultdict(list), defaultdict(list)
     cum = 0
     n_seq = 0
@@ -116,7 +112,7 @@ def evaluate_isp(model, device, shift, refine_kwargs):
                     ])
                 sig_n = sig_n[:WINDOW_SAMPLES_250]
                 base, refined = _predict_boundary_pair(
-                    model, sig_n, lead_idx, device, shift, refine_kwargs
+                    model, sig_n, lead_idx, device, refine_kwargs
                 )
                 _add_boundaries(base_pred, base, cum)
                 _add_boundaries(refined_pred, refined, cum)
@@ -146,7 +142,7 @@ def _qtdb_t_subset_ids():
     return out
 
 
-def evaluate_qtdb(model, device, shift, refine_kwargs):
+def evaluate_qtdb(model, device, refine_kwargs):
     base_pred, refined_pred, true = defaultdict(list), defaultdict(list), defaultdict(list)
     cum = 0
     n_seq = 0
@@ -166,7 +162,7 @@ def evaluate_qtdb(model, device, shift, refine_kwargs):
             continue
         sig_n = _normalize(sig)
         base, refined = _predict_boundary_pair(
-            model, sig_n, lead_idx=1, device=device, shift=shift, refine_kwargs=refine_kwargs
+            model, sig_n, lead_idx=1, device=device, refine_kwargs=refine_kwargs
         )
         _add_boundaries(base_pred, base, cum)
         _add_boundaries(refined_pred, refined, cum)
@@ -247,7 +243,7 @@ def main():
                 continue
             t0 = time.time()
             base_pred, refined_pred, true, n_seq = fn(
-                model, args.device, spec["shift"], refine_kwargs
+                model, args.device, refine_kwargs
             )
             result = summarize(base_pred, refined_pred, true)
             result["n_seq"] = n_seq

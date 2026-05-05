@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 from ecgcode import eval as ee, isp, ludb
 from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
 from ecgcode.stage2.infer import (
-    BOUNDARY_SHIFT_C, extract_boundaries, post_process_frames, predict_frames,
+    extract_boundaries, post_process_frames, predict_frames,
 )
 from ecgcode.stage2.model import FrameClassifier
 from ecgcode.stage2.multi_dataset import CombinedFrameDataset
@@ -77,7 +77,7 @@ def evaluate_ludb(model, device, shift):
             if len(sig_250) < WINDOW_SAMPLES_250: continue
             pred = predict_frames(model, sig_250, lead_idx, device=device)
             pp = post_process_frames(pred, frame_ms=FRAME_MS)
-            b = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift)
+            b = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS)
             for k, v in b.items():
                 bp[k].extend(int(x) + cum for x in v)
             try:
@@ -120,7 +120,7 @@ def evaluate_isp(model, device, shift):
                 sig_n = sig_n[:WINDOW_SAMPLES_250]
                 pred = predict_frames(model, sig_n, lead_idx, device=device)
                 pp = post_process_frames(pred, frame_ms=FRAME_MS)
-                b = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift)
+                b = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS)
                 for k, v in b.items():
                     bp[k].extend(int(x) + cum for x in v)
                 for k, v in ann.items():
@@ -191,7 +191,6 @@ def main():
             n_params = sum(p.numel() for p in model.parameters())
             elapsed = 0
         # Evaluate with C-style p_off shift (it's the dominant pattern)
-        shift = BOUNDARY_SHIFT_C
         t0 = time.time()
         ludb_metrics, n_ludb = evaluate_ludb(model, device, shift)
         print(f"\n  [LUDB val, {n_ludb} seqs, {time.time()-t0:.1f}s, shift={shift}]", flush=True)

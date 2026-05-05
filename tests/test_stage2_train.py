@@ -62,13 +62,11 @@ def test_checkpoint_contains_inference_metadata():
             metrics,
             cfg,
             postprocess_config={"min_duration_ms": 60},
-            boundary_shift_ms={"p_off": -22},
         )
         bundle = load_model_bundle(path, device="cpu")
         assert bundle["model_config"]["d_model"] == 128
         assert bundle["model_config"]["n_layers"] == 2
         assert bundle["postprocess_config"] == {"min_duration_ms": 60}
-        assert bundle["boundary_shift_ms"] == {"p_off": -22}
         assert bundle["metrics"] == metrics
 
 

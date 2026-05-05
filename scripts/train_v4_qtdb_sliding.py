@@ -28,7 +28,7 @@ from torch.utils.data import ConcatDataset, DataLoader
 from ecgcode import eval as ee, isp, ludb
 from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
 from ecgcode.stage2.infer import (
-    BOUNDARY_SHIFT_C, extract_boundaries, post_process_frames, predict_frames,
+    extract_boundaries, post_process_frames, predict_frames,
 )
 from ecgcode.stage2.model import FrameClassifier
 from ecgcode.stage2.multi_dataset import (
@@ -88,7 +88,7 @@ def evaluate_dual(model, device, shift, kind):
                 if len(sig_250) < WINDOW_SAMPLES_250: continue
                 pred = predict_frames(model, sig_250, lead_idx, device=device)
                 pp = post_process_frames(pred, frame_ms=FRAME_MS)
-                bds = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift)
+                bds = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS)
                 for k, v in bds.items():
                     for x in v:
                         bp_full[k].append(int(x) + cum)
@@ -128,7 +128,7 @@ def evaluate_dual(model, device, shift, kind):
                     sig_n = sig_n[:WINDOW_SAMPLES_250]
                     pred = predict_frames(model, sig_n, lead_idx, device=device)
                     pp = post_process_frames(pred, frame_ms=FRAME_MS)
-                    bds = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift)
+                    bds = extract_boundaries(pp, fs=250, frame_ms=FRAME_MS)
                     for k, v in bds.items():
                         for x in v:
                             bp_full[k].append(int(x) + cum)
@@ -215,7 +215,6 @@ def main():
     model = FrameClassifier(d_model=128, n_layers=8)
     load_checkpoint(ref_ckpt, model)
     model = model.to(device).train(False)
-    shift = BOUNDARY_SHIFT_C
     lf, lm, _ = evaluate_dual(model, device, shift, "ludb")
     isf, ism, _ = evaluate_dual(model, device, shift, "isp")
     full["C_ref"] = {

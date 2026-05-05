@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader
 from ecgcode import eval as ee, isp, ludb
 from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
 from ecgcode.stage2.infer import (
-    BOUNDARY_SHIFT_C, extract_boundaries, post_process_frames, predict_frames,
+    extract_boundaries, post_process_frames, predict_frames,
 )
 from ecgcode.stage2.model import FrameClassifier
 from ecgcode.stage2.multi_dataset import (
@@ -85,7 +85,7 @@ def evaluate_ludb(model, device, shift):
             if len(sig_250) < WINDOW_SAMPLES_250: continue
             pred = predict_frames(model, sig_250, lead_idx, device=device)
             pp = post_process_frames(pred, frame_ms=FRAME_MS)
-            for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift).items():
+            for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS).items():
                 bp[k].extend(int(x) + cum for x in v)
             try:
                 gt_ann = ludb.load_annotations(rid, lead)
@@ -124,7 +124,7 @@ def evaluate_isp(model, device, shift):
                 sig_n = sig_n[:WINDOW_SAMPLES_250]
                 pred = predict_frames(model, sig_n, lead_idx, device=device)
                 pp = post_process_frames(pred, frame_ms=FRAME_MS)
-                for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift).items():
+                for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS).items():
                     bp[k].extend(int(x) + cum for x in v)
                 for k, v in ann.items():
                     if k.endswith("_on") or k.endswith("_off"):
@@ -183,7 +183,6 @@ def main():
     model = FrameClassifier(d_model=128, n_layers=8)
     load_checkpoint(ref_ckpt, model)
     model = model.to(device).train(False)
-    shift = BOUNDARY_SHIFT_C
     ludb_metrics, _ = evaluate_ludb(model, device, shift)
     isp_metrics, _ = evaluate_isp(model, device, shift)
     avg_l = float(np.mean([ludb_metrics[k]["f1"] for k in TOL]))

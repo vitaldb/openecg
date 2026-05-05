@@ -258,7 +258,18 @@ class QTDBSlidingDataset(Dataset):
     """
 
     def __init__(self, fs=250, scale_factors=(0.9, 1.0, 1.1, 1.2),
-                 windows_per_record=20, margin_samples=1000, seed=42):
+                 windows_per_record=20, margin_samples=1000, seed=42,
+                 ignore_missing_waves=False, q1c_pu_merge=False):
+        """
+        ignore_missing_waves: if True, when a wave type has unpaired on/off
+            (e.g., q1c with t_off but no t_on), mark a region around the
+            unpaired offset as IGNORE_INDEX (estimate [off-250ms, off+50ms]).
+        q1c_pu_merge: if True, fill missing wave-onsets in q1c from pu0
+            (matched by QRS_on proximity). Mutually exclusive with the IGNORE
+            approach.
+        """
+        self._ignore_missing_waves = ignore_missing_waves
+        self._q1c_pu_merge = q1c_pu_merge
         import scipy.signal as scipy_signal
         self.fs = fs
         self.scale_factors = tuple(scale_factors)
@@ -270,7 +281,10 @@ class QTDBSlidingDataset(Dataset):
         for rid in qtdb.records_with_q1c():
             try:
                 rec = qtdb.load_record(rid)
-                ann = qtdb.load_q1c(rid)
+                if self._q1c_pu_merge:
+                    ann = qtdb.load_q1c_pu_merged(rid, pu_lead=0)
+                else:
+                    ann = qtdb.load_q1c(rid)
             except Exception:
                 continue
             all_pos = []
@@ -376,6 +390,34 @@ class QTDBSlidingDataset(Dataset):
                 if hi > lo:
                     sample_labels[lo:hi] = cls_id
 
+        # If ignore_missing_waves: mark estimated regions around unpaired
+        # offsets as IGNORE so model isn't trained with wrong OTHER labels.
+        if getattr(self, "_ignore_missing_waves", False):
+            spf = self.fs // 1000
+            margin_before = 62  # ~250ms @ 250Hz: typical wave width upper bound
+            margin_after = 12   # ~50ms tolerance after the marked offset
+            for cls_id, on_key, off_key in [(ee.SUPER_P, "p_on", "p_off"),
+                                             (ee.SUPER_QRS, "qrs_on", "qrs_off"),
+                                             (ee.SUPER_T, "t_on", "t_off")]:
+                if len(ann_r[on_key]) > 0 and len(ann_r[off_key]) > 0:
+                    continue  # both present, normal pairing already handled
+                # Apply IGNORE around any standalone offsets
+                for off in ann_r[off_key]:
+                    if off < win_start - margin_before or off >= win_end + margin_after:
+                        continue
+                    lo = max(0, off - margin_before - win_start)
+                    hi = min(WINDOW_SAMPLES, off + margin_after - win_start + 1)
+                    if hi > lo:
+                        sample_labels[lo:hi] = ee.IGNORE_INDEX
+                # Apply IGNORE around any standalone onsets
+                for on in ann_r[on_key]:
+                    if on < win_start - margin_after or on >= win_end + margin_before:
+                        continue
+                    lo = max(0, on - margin_after - win_start)
+                    hi = min(WINDOW_SAMPLES, on + margin_before - win_start + 1)
+                    if hi > lo:
+                        sample_labels[lo:hi] = ee.IGNORE_INDEX
+
         # Frame-level labels (50Hz, 500 frames)
         spf = WINDOW_SAMPLES // WINDOW_FRAMES  # 5
         frame_labels = np.zeros(WINDOW_FRAMES, dtype=np.int64)
@@ -408,6 +450,138 @@ class QTDBSlidingDataset(Dataset):
             cur += len(r["leads"])
         sig_win, lead_idx, frame_labels = self._build_window(chosen_rec, chosen_lead)
         return (torch.from_numpy(sig_win),
+                torch.tensor(lead_idx, dtype=torch.long),
+                torch.from_numpy(frame_labels))
+
+
+class QTDBPuFullDataset(Dataset):
+    """QTDB sliding-window dataset using pu0/pu1 (dense automatic labels) over
+    the FULL 15-min record. Yields ~37x more labeled beats than q1c training.
+
+    Each record-lead pair contributes `windows_per_record` random 10s windows.
+    Labels come from pu0 (for signal 0) or pu1 (for signal 1), per lead. No
+    IGNORE_INDEX needed because pu covers the entire signal.
+    """
+
+    # Best-effort lead mapping for non-standard QTDB lead names. Holter-style
+    # modifications and generic channels are mapped to nearest 12-lead approx.
+    _EXTENDED_LEAD_MAP = {
+        # Holter / modified bipolar limb leads ≈ lead II
+        "MLII": 1, "ML II": 1, "ML5": 10, "MLIII": 2,
+        # Modified chest leads (CM5/CC5 ≈ V5; CM2 ≈ V2; CM4 ≈ V4)
+        "CM5": 10, "CC5": 10, "CM2": 7, "CM4": 9,
+        # Lead III variants
+        "D3": 2, "D4": 2,
+        # Composite / variant precordial leads — fall back to nearest base
+        "mod.V1": 6, "V1-V2": 6, "V2-V3": 7, "V4-V5": 9,
+        # Generic unlabeled channels — default to lead II
+        "ECG1": 1, "ECG2": 1,
+    }
+
+    def _resolve_lead_id(self, lead_name):
+        if lead_name in QTDB_LEAD_TO_LUDB_ID:
+            return QTDB_LEAD_TO_LUDB_ID[lead_name]
+        if lead_name in self._EXTENDED_LEAD_MAP:
+            return self._EXTENDED_LEAD_MAP[lead_name]
+        return 1  # default: lead II
+
+    def __init__(self, fs=250, windows_per_record=20, seed=42):
+        self.fs = fs
+        self.windows_per_record = windows_per_record
+        self.rng = np.random.default_rng(seed)
+        self.records = []  # list of {rid, leads: [(name, lead_idx, sig, ann_per_pu)]}
+        n_no_ann = 0
+        for rid in qtdb.records_with_q1c():
+            try:
+                rec = qtdb.load_record(rid)
+            except Exception:
+                continue
+            mappable = []
+            for sig_idx, (lead_name, sig) in enumerate(rec.items()):
+                try:
+                    ann = qtdb.load_pu(rid, lead=sig_idx)
+                except Exception:
+                    n_no_ann += 1
+                    continue
+                lead_id = self._resolve_lead_id(lead_name)
+                mappable.append((lead_name, lead_id,
+                                 sig.astype(np.float32), ann))
+            if mappable:
+                self.records.append({"rid": rid, "leads": mappable})
+        n_pairs = sum(len(r["leads"]) for r in self.records)
+        print(f"QTDBPuFull: {len(self.records)} records, {n_pairs} record-lead pairs, "
+              f"{n_pairs * windows_per_record} total windows; "
+              f"skipped {n_no_ann} no-ann")
+
+    def __len__(self):
+        return sum(len(r["leads"]) for r in self.records) * self.windows_per_record
+
+    def label_counts(self):
+        counts = np.zeros(N_CLASSES, dtype=np.int64)
+        for r in self.records:
+            for _, _, sig, ann in r["leads"]:
+                n = len(sig)
+                n_p = sum(off - on + 1 for on, off in
+                          zip(ann.get("p_on", []), ann.get("p_off", [])))
+                n_q = sum(off - on + 1 for on, off in
+                          zip(ann.get("qrs_on", []), ann.get("qrs_off", [])))
+                n_t = sum(off - on + 1 for on, off in
+                          zip(ann.get("t_on", []), ann.get("t_off", [])))
+                counts[ee.SUPER_P] += n_p
+                counts[ee.SUPER_QRS] += n_q
+                counts[ee.SUPER_T] += n_t
+                counts[ee.SUPER_OTHER] += max(0, n - n_p - n_q - n_t)
+        return np.maximum(counts, 1)
+
+    def _build_window(self, sig, ann, lead_idx):
+        n = len(sig)
+        if n <= WINDOW_SAMPLES:
+            win_start = 0
+        else:
+            win_start = int(self.rng.integers(0, n - WINDOW_SAMPLES + 1))
+        win_end = win_start + WINDOW_SAMPLES
+        sig_win = sig[win_start:win_end]
+        if len(sig_win) < WINDOW_SAMPLES:
+            pad = np.zeros(WINDOW_SAMPLES - len(sig_win), dtype=sig_win.dtype)
+            sig_win = np.concatenate([sig_win, pad])
+        sig_n = ((sig_win - sig_win.mean()) / (sig_win.std() + 1e-6)).astype(np.float32)
+
+        sample_labels = np.full(WINDOW_SAMPLES, ee.SUPER_OTHER, dtype=np.int64)
+        for cls_id, on_key, off_key in [(ee.SUPER_P, "p_on", "p_off"),
+                                         (ee.SUPER_QRS, "qrs_on", "qrs_off"),
+                                         (ee.SUPER_T, "t_on", "t_off")]:
+            ons = ann.get(on_key, [])
+            offs = ann.get(off_key, [])
+            for on, off in zip(ons, offs):
+                if on >= win_end or off < win_start:
+                    continue
+                lo = max(0, on - win_start)
+                hi = min(WINDOW_SAMPLES, off + 1 - win_start)
+                if hi > lo:
+                    sample_labels[lo:hi] = cls_id
+
+        spf = WINDOW_SAMPLES // WINDOW_FRAMES
+        frame_labels = np.zeros(WINDOW_FRAMES, dtype=np.int64)
+        for fi in range(WINDOW_FRAMES):
+            seg = sample_labels[fi * spf:(fi + 1) * spf]
+            vals, counts = np.unique(seg, return_counts=True)
+            frame_labels[fi] = int(vals[np.argmax(counts)])
+        return sig_n, lead_idx, frame_labels
+
+    def __getitem__(self, idx):
+        n_pairs = sum(len(r["leads"]) for r in self.records)
+        flat = idx % (n_pairs * self.windows_per_record)
+        pair_idx = flat // self.windows_per_record
+        cur = 0
+        chosen = None
+        for r in self.records:
+            if pair_idx < cur + len(r["leads"]):
+                chosen = r["leads"][pair_idx - cur]
+                break
+            cur += len(r["leads"])
+        lead_name, lead_idx, sig, ann = chosen
+        sig_n, lead_idx, frame_labels = self._build_window(sig, ann, lead_idx)
+        return (torch.from_numpy(sig_n),
                 torch.tensor(lead_idx, dtype=torch.long),
                 torch.from_numpy(frame_labels))
 

@@ -110,6 +110,24 @@ def load_annotations(record_id: int, lead: str) -> dict[str, list[int]]:
     return out
 
 
+def labeled_range(record_id: int, lead: str) -> tuple[int, int] | None:
+    """Return (first_sample, last_sample) at native 500Hz spanning all labeled
+    boundaries for one record-lead, or None if no annotations.
+
+    LUDB cardiologists skip the first/last partial beats (typical unlabeled
+    edges: ~1.4s start, ~1.3s end out of 5000-sample 10s window). Use this
+    range to mask edge frames during training and to scope the eval region so
+    correctly detected but unlabeled edge beats don't penalize PPV.
+    """
+    ann = load_annotations(record_id, lead)
+    all_pos = []
+    for k in ("p_on", "p_off", "qrs_on", "qrs_off", "t_on", "t_off"):
+        all_pos.extend(ann.get(k, []))
+    if not all_pos:
+        return None
+    return (int(min(all_pos)), int(max(all_pos)))
+
+
 def load_metadata() -> list[dict]:
     """Read ludb.csv. Returns list of dicts with normalized rhythm field.
 

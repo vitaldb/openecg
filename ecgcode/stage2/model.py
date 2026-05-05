@@ -1,5 +1,7 @@
 """Stage 2 FrameClassifier: Conv + Transformer + Linear -> per-frame 4-class logits."""
 
+import math
+
 import torch
 from torch import nn
 
@@ -53,6 +55,116 @@ class FrameClassifier(nn.Module):
         h = torch.nn.functional.gelu(self.conv1(x.unsqueeze(1)))
         h = torch.nn.functional.gelu(self.conv2(h))
         h = h.transpose(1, 2)
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+        h = self.transformer(h)
+        return self.head(h)
+
+
+class FrameClassifierViT(nn.Module):
+    """ViT-style: non-overlapping patch + Linear projection + positional encoding
+    + Transformer + Linear head.
+
+    Input:  signal [B, 2500] @ 250Hz, lead_id [B] in {0..11}.
+    Output: logits [B, n_patches, n_classes] (per-frame supercategory).
+
+    Options:
+      pos_type: 'sinusoidal' (fixed), 'learnable' (nn.Embedding), or 'none'
+      use_lead_emb: add per-lead embedding broadcast across all patches
+      conv_stem: pre-patch Conv1d block to extract local features before
+                 the linear patch embedding. Conv stem produces a richer
+                 input than raw signal samples for the linear projection.
+                 conv_stem=True applies: Conv1d(1->16, k=7, p=3) + GELU
+                 + Conv1d(16->32, k=5, p=2) + GELU, length-preserving.
+    """
+
+    def __init__(
+        self,
+        patch_size=5,
+        n_leads=12,
+        d_model=64,
+        n_heads=4,
+        n_layers=4,
+        ff=256,
+        n_classes=4,
+        dropout=0.1,
+        use_lead_emb=True,
+        pos_type="sinusoidal",
+        conv_stem=False,
+        max_seq_len=512,
+    ):
+        super().__init__()
+        self.patch_size = patch_size
+        self.use_lead_emb = use_lead_emb
+        self.pos_type = pos_type
+        self.conv_stem = conv_stem
+        self.model_config = {
+            "patch_size": patch_size,
+            "n_leads": n_leads,
+            "d_model": d_model,
+            "n_heads": n_heads,
+            "n_layers": n_layers,
+            "ff": ff,
+            "n_classes": n_classes,
+            "dropout": dropout,
+            "use_lead_emb": use_lead_emb,
+            "pos_type": pos_type,
+            "conv_stem": conv_stem,
+            "arch": "vit",
+        }
+        if conv_stem:
+            self.stem_conv1 = nn.Conv1d(1, 16, kernel_size=7, padding=3)
+            self.stem_conv2 = nn.Conv1d(16, 32, kernel_size=5, padding=2)
+            patch_in = 32 * patch_size
+        else:
+            patch_in = patch_size
+        self.patch_embed = nn.Linear(patch_in, d_model)
+        if use_lead_emb:
+            self.lead_emb = nn.Embedding(n_leads, d_model)
+
+        if pos_type == "sinusoidal":
+            pe = torch.zeros(max_seq_len, d_model)
+            position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
+            div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float)
+                                  * (-math.log(10000.0) / d_model))
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            self.register_buffer("pos_enc", pe.unsqueeze(0))
+        elif pos_type == "learnable":
+            self.pos_enc = nn.Parameter(torch.zeros(1, max_seq_len, d_model))
+            nn.init.normal_(self.pos_enc, std=0.02)
+        elif pos_type == "none":
+            self.pos_enc = None
+        else:
+            raise ValueError(f"unknown pos_type: {pos_type}")
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=ff,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.head = nn.Linear(d_model, n_classes)
+
+    def forward(self, x, lead_id):
+        B, N = x.shape  # N=2500
+        assert N % self.patch_size == 0, f"signal length {N} not divisible by patch {self.patch_size}"
+        n_patches = N // self.patch_size  # 500
+        if self.conv_stem:
+            h = torch.nn.functional.gelu(self.stem_conv1(x.unsqueeze(1)))
+            h = torch.nn.functional.gelu(self.stem_conv2(h))  # [B, 32, N]
+            # Reshape into patches: [B, n_patches, 32 * patch_size]
+            h = h.transpose(1, 2)  # [B, N, 32]
+            patches = h.reshape(B, n_patches, self.patch_size * 32)
+        else:
+            patches = x.view(B, n_patches, self.patch_size)
+        h = self.patch_embed(patches)  # [B, n_patches, d_model]
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
         if self.use_lead_emb:
             h = h + self.lead_emb(lead_id).unsqueeze(1)
         h = self.transformer(h)

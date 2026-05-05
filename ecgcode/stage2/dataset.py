@@ -18,12 +18,20 @@ class LUDBFrameDataset(Dataset):
     """Eager-load LUDB train/val sequences. Memory: ~30 MB for 1908 sequences.
 
     __getitem__ returns: (signal[2500] float32, lead_id scalar long, labels[500] long).
+
+    `mask_unlabeled_edges`: when True, frames before the first GT boundary
+    (minus margin) and after the last GT boundary (plus margin) are set to
+    IGNORE_INDEX so the model is not penalized for correctly detecting
+    edge beats that the cardiologist did not annotate. LUDB cardiologists
+    skip ~1.4s at start and ~1.3s at end on average (per record-lead).
     """
 
-    def __init__(self, record_ids):
+    def __init__(self, record_ids, mask_unlabeled_edges=False, edge_margin_ms=100):
         self.items = []
         self.cache = {}
 
+        margin_250 = int(round(edge_margin_ms * FS_INPUT / 1000.0))
+        spf = int(round(FRAME_MS * FS_INPUT / 1000.0))  # 5
         for rid in record_ids:
             try:
                 record = ludb.load_record(rid)
@@ -42,6 +50,15 @@ class LUDBFrameDataset(Dataset):
                 labels = ee.gt_to_super_frames(
                     gt_ann, n_samples=len(sig_500), fs=FS_NATIVE, frame_ms=FRAME_MS
                 ).astype(np.int64)
+                if mask_unlabeled_edges:
+                    rng = ludb.labeled_range(rid, lead)
+                    if rng is not None:
+                        first_250 = max(0, rng[0] // 2 - margin_250)
+                        last_250 = rng[1] // 2 + margin_250
+                        first_frame = first_250 // spf
+                        last_frame = (last_250 + spf - 1) // spf
+                        labels[:first_frame] = ee.IGNORE_INDEX
+                        labels[last_frame + 1:] = ee.IGNORE_INDEX
                 self.cache[(rid, lead)] = (sig_250, lead_idx, labels)
                 self.items.append((rid, lead))
 

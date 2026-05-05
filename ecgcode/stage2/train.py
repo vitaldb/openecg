@@ -100,8 +100,7 @@ def run_eval(model, loader, device):
 
 
 def save_checkpoint(path, model, metrics, config, model_config=None,
-                    postprocess_config=None, boundary_shift_ms=None,
-                    extra=None):
+                    postprocess_config=None, extra=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     resolved_model_config = model_config
@@ -113,7 +112,6 @@ def save_checkpoint(path, model, metrics, config, model_config=None,
         "config": asdict(config),
         "model_config": resolved_model_config,
         "postprocess_config": postprocess_config or {},
-        "boundary_shift_ms": boundary_shift_ms or {},
         "extra": extra or {},
     }, path)
 

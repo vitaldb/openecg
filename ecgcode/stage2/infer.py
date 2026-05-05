@@ -64,7 +64,6 @@ def load_model_bundle(ckpt_path, device="cuda", **model_kwargs):
         "metrics": blob.get("metrics", {}),
         "model_config": config,
         "postprocess_config": blob.get("postprocess_config", {}),
-        "boundary_shift_ms": blob.get("boundary_shift_ms", {}),
         "train_config": blob.get("config", {}),
         "extra": blob.get("extra", {}),
     }
@@ -95,68 +94,47 @@ def predict_to_boundaries(
     frame_ms=20,
     postprocess=True,
     postprocess_kwargs=None,
-    boundary_shift_ms=None,
     refine=False,
     refine_kwargs=None,
 ):
     """Single-sequence inference to boundary sample indices.
 
     Set `refine=True` to apply the optional Stage 3 signal-aware refiner after
-    frame post-processing and fixed boundary shifts.
+    frame post-processing.
     """
     frames = predict_frames(model, sig, lead_id, device=device)
     if postprocess:
         frames = post_process_frames(frames, frame_ms=frame_ms, **(postprocess_kwargs or {}))
-    boundaries = extract_boundaries(
-        frames, fs=fs, frame_ms=frame_ms, boundary_shift_ms=boundary_shift_ms
-    )
+    boundaries = extract_boundaries(frames, fs=fs, frame_ms=frame_ms)
     if refine:
         from ecgcode.stage2.refiner import refine_boundaries
         boundaries = refine_boundaries(sig, boundaries, fs=fs, **(refine_kwargs or {}))
     return boundaries
 
 
-def extract_boundaries(frames, fs=250, frame_ms=20, boundary_shift_ms=None):
+def extract_boundaries(frames, fs=250, frame_ms=20):
     """Extract per-wave boundary sample indices from a per-frame supercategory array.
 
     Returns dict: {p_on, p_off, qrs_on, qrs_off, t_on, t_off} -> list[int sample idx].
-
-    boundary_shift_ms: optional dict with keys like {"p_off": -22} to apply a
-    fixed shift in ms to specific boundaries. The v4 C checkpoint has a +22ms
-    p_off systematic bias on LUDB val and +20ms on ISP test (model predicts P
-    offset late vs cardiologist annotation); recommended shift = {"p_off": -22}.
-    F (LUDB-only) has a smaller +14ms p_off bias; recommended shift = {"p_off": -15}.
-    See `scripts/fix_p_off_bias.py` for the bias measurements per checkpoint.
+    Boundaries reflect the model's raw frame transitions with no shift applied.
     """
-    import numpy as _np
     out = {"p_on": [], "p_off": [], "qrs_on": [], "qrs_off": [], "t_on": [], "t_off": []}
     super_to_name = {1: "p", 2: "qrs", 3: "t"}  # SUPER_P, SUPER_QRS, SUPER_T
     spf = int(round(frame_ms * fs / 1000.0))
-    shifts = boundary_shift_ms or {}
-    shift_samples = {k: int(round(v * fs / 1000.0)) for k, v in shifts.items()}
     prev = 0
     for f_idx, cur in enumerate(frames):
         cur = int(cur)
         if cur != prev:
             sample = f_idx * spf
             if prev in super_to_name:
-                key = f"{super_to_name[prev]}_off"
-                out[key].append(int(sample - 1 + shift_samples.get(key, 0)))
+                out[f"{super_to_name[prev]}_off"].append(int(sample - 1))
             if cur in super_to_name:
-                key = f"{super_to_name[cur]}_on"
-                out[key].append(int(sample + shift_samples.get(key, 0)))
+                out[f"{super_to_name[cur]}_on"].append(int(sample))
         prev = cur
     if prev in super_to_name:
         sample = len(frames) * spf
-        key = f"{super_to_name[prev]}_off"
-        out[key].append(int(sample - 1 + shift_samples.get(key, 0)))
+        out[f"{super_to_name[prev]}_off"].append(int(sample - 1))
     return out
-
-
-# Recommended per-checkpoint boundary shifts (measured on LUDB val + ISP test)
-# Use with `extract_boundaries(..., boundary_shift_ms=BOUNDARY_SHIFT_C)`.
-BOUNDARY_SHIFT_C = {"p_off": -22}  # C (combined big +lead_emb): +22ms p_off bias
-BOUNDARY_SHIFT_F = {"p_off": -15}  # F (LUDB only no_lead_emb): +14ms p_off bias
 
 
 def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=200,

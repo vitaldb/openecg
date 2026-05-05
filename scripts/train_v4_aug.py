@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from ecgcode import eval as ee, isp, ludb
 from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
 from ecgcode.stage2.infer import (
-    BOUNDARY_SHIFT_C, extract_boundaries, post_process_frames, predict_frames,
+    extract_boundaries, post_process_frames, predict_frames,
 )
 from ecgcode.stage2.model import FrameClassifier
 from ecgcode.stage2.multi_dataset import (
@@ -80,7 +80,7 @@ def evaluate_ludb(model, device, shift):
             if len(sig_250) < WINDOW_SAMPLES_250: continue
             pred = predict_frames(model, sig_250, lead_idx, device=device)
             pp = post_process_frames(pred, frame_ms=FRAME_MS)
-            for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift).items():
+            for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS).items():
                 bp[k].extend(int(x) + cum for x in v)
             try:
                 gt_ann = ludb.load_annotations(rid, lead)
@@ -119,7 +119,7 @@ def evaluate_isp(model, device, shift):
                 sig_n = sig_n[:WINDOW_SAMPLES_250]
                 pred = predict_frames(model, sig_n, lead_idx, device=device)
                 pp = post_process_frames(pred, frame_ms=FRAME_MS)
-                for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS, boundary_shift_ms=shift).items():
+                for k, v in extract_boundaries(pp, fs=250, frame_ms=FRAME_MS).items():
                     bp[k].extend(int(x) + cum for x in v)
                 for k, v in ann.items():
                     if k.endswith("_on") or k.endswith("_off"):
@@ -185,7 +185,6 @@ def main():
             print(f"  Loaded augmented train: {len(train_ds)} (n_ops={n_ops})", flush=True)
             model, elapsed = train_model(name, train_ds, ludb_val, device, ckpt)
 
-        shift = BOUNDARY_SHIFT_C
         t0 = time.time()
         ludb_metrics, n_l = evaluate_ludb(model, device, shift)
         print(f"\n  [LUDB val, {n_l} seqs, {time.time()-t0:.1f}s, shift={shift}]", flush=True)

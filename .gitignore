@@ -72,3 +72,10 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Third-party vendored libraries (clone manually)
+third_party/
+
+# Misc
+.claude/
+out/
