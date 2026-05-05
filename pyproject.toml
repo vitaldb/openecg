@@ -9,6 +9,8 @@ dependencies = [
     "neurokit2>=0.2.7",
     "wfdb>=4.1",
     "torch>=2.6",
+    "transformers>=4.40",
+    "huggingface-hub>=0.20",
 ]
 
 [dependency-groups]
