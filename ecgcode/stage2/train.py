@@ -196,3 +196,105 @@ def fit(model, train_loader, val_loader, class_weights, config,
                 break
 
     return best_metrics or {}
+
+
+def kl_cross_entropy(logits, soft_target, weight=None):
+    """Soft-target cross-entropy (-Σ target · log_softmax(logits)).
+
+    logits:      [B, T, C] raw model output (cls_head over batch_first sequence).
+    soft_target: [B, T, C] non-negative target weights. Rows whose sum is 0 are
+                 masked out (no contribution to the loss).
+    weight:      optional [C] tensor; per-class re-weight applied to target
+                 before renormalisation so loss stays in CE-equivalent scale.
+    """
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    if weight is not None:
+        soft_target = soft_target * weight.view(1, 1, -1)
+    row_sum = soft_target.sum(dim=-1, keepdim=True)
+    valid = row_sum.squeeze(-1) > 0
+    if not valid.any():
+        return logits.sum() * 0.0
+    target_norm = soft_target / row_sum.clamp(min=1e-8)
+    per_frame = -(target_norm * log_probs).sum(dim=-1)
+    return per_frame[valid].mean()
+
+
+def train_one_epoch_kl(model, loader, optimizer, class_weights, device,
+                       grad_clip=1.0, scheduler=None):
+    """Per-epoch training loop using soft-target KL on a [B, T, C] target."""
+    model.train()
+    weights = class_weights.to(device)
+    total = 0.0
+    n = 0
+    for sigs, leads, soft in loader:
+        sigs = sigs.to(device)
+        leads = leads.to(device)
+        soft = soft.to(device).float()
+        logits = model(sigs, leads)
+        loss = kl_cross_entropy(logits, soft, weight=weights)
+        optimizer.zero_grad()
+        loss.backward()
+        if grad_clip and grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        total += float(loss.item())
+        n += 1
+    return total / max(1, n)
+
+
+def fit_kl(model, train_loader, val_loader, class_weights, config,
+           device="cuda", ckpt_path=None, log_fn=print):
+    """fit() variant using KL on soft training targets; eval still uses hard labels."""
+    model = model.to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.lr, weight_decay=config.weight_decay,
+    )
+    total_steps = config.epochs * max(1, len(train_loader))
+    warmup_steps = int(total_steps * config.warmup_frac)
+
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + np.cos(np.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    best_score = -1.0
+    best_metrics = None
+    bad = 0
+    for epoch in range(config.epochs):
+        train_loss = train_one_epoch_kl(
+            model, train_loader, optimizer, class_weights, device,
+            scheduler=scheduler, grad_clip=config.grad_clip,
+        )
+        val_metrics = run_eval(model, val_loader, device)
+        score = score_val_metrics(val_metrics, config.early_stop_metric)
+        log_fn(
+            f"epoch {epoch:3d}  train_kl={train_loss:.4f}  "
+            f"val_F1: P={val_metrics[ecg_eval.SUPER_P]['f1']:.3f} "
+            f"QRS={val_metrics[ecg_eval.SUPER_QRS]['f1']:.3f} "
+            f"T={val_metrics[ecg_eval.SUPER_T]['f1']:.3f} "
+            f"score={score:.3f}"
+        )
+        if score > best_score:
+            best_score = score
+            best_metrics = {
+                "epoch": epoch,
+                "early_stop_metric": config.early_stop_metric,
+                "val_score": score,
+                "val_qrs_f1": val_metrics[ecg_eval.SUPER_QRS]["f1"],
+                "val_p_f1": val_metrics[ecg_eval.SUPER_P]["f1"],
+                "val_t_f1": val_metrics[ecg_eval.SUPER_T]["f1"],
+                "val_other_f1": val_metrics[ecg_eval.SUPER_OTHER]["f1"],
+            }
+            bad = 0
+            if ckpt_path is not None:
+                save_checkpoint(ckpt_path, model, best_metrics, config)
+        else:
+            bad += 1
+            if bad >= config.early_stop_patience:
+                log_fn(f"Early stop at epoch {epoch}")
+                break
+    return best_metrics or {}
