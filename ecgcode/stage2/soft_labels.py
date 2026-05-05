@@ -45,3 +45,34 @@ def soft_boundary_labels(
         soft[i + 1, a] = 1.0 - alpha
         soft[i + 1, b] = alpha
     return soft
+
+
+class SoftLabelDataset(Dataset):
+    """Wraps a hard-label Dataset.
+
+    The base dataset must yield (sig, lead_id, hard_labels[T] long). This
+    wrapper instead yields (sig, lead_id, soft_labels[T, n_classes] float32)
+    by applying soft_boundary_labels to each item.
+    """
+
+    def __init__(self, base, alpha: float = 0.7, n_classes: int = 4,
+                 ignore_index: int = ee.IGNORE_INDEX):
+        self.base = base
+        self.alpha = float(alpha)
+        self.n_classes = int(n_classes)
+        self.ignore_index = int(ignore_index)
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        sig, lead_id, labels = self.base[idx]
+        labels_np = labels.numpy() if hasattr(labels, "numpy") else np.asarray(labels)
+        soft = soft_boundary_labels(
+            labels_np, alpha=self.alpha, n_classes=self.n_classes,
+            ignore_index=self.ignore_index,
+        )
+        return sig, lead_id, torch.from_numpy(soft)
+
+    def label_counts(self):
+        return self.base.label_counts()
