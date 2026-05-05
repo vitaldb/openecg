@@ -203,3 +203,47 @@ def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=20
             i = j
 
     return arr
+
+
+REG_CHANNELS = ("p_on", "p_off", "qrs_on", "qrs_off", "t_on", "t_off")
+
+
+@torch.no_grad()
+def predict_frames_with_reg(model, sig, lead_id, device="cuda"):
+    """Single-sequence inference for a (cls, reg) tuple-output model.
+    Returns (frames[T] uint8, reg_offsets[T, 6] float32).
+    """
+    x = torch.from_numpy(sig.astype(np.float32)).unsqueeze(0).to(device)
+    lid = torch.tensor([lead_id], dtype=torch.long, device=device)
+    cls_logits, reg = model(x, lid)
+    frames = cls_logits.argmax(dim=-1).cpu().numpy().squeeze(0).astype(np.uint8)
+    reg_np = reg.cpu().numpy().squeeze(0).astype(np.float32)
+    return frames, reg_np
+
+
+def apply_reg_to_boundaries(boundaries, reg_offsets, samples_per_frame=5,
+                              max_window=10000):
+    """Refine boundary samples by adding the reg head's predicted offset
+    at the corresponding frame.
+
+    boundaries: dict from extract_boundaries (key -> list[int sample]).
+    reg_offsets: [T, 6] array; channel order = REG_CHANNELS.
+    """
+    refined: dict[str, list[int]] = {}
+    for key, samples in boundaries.items():
+        if key not in REG_CHANNELS:
+            refined[key] = list(samples)
+            continue
+        ch = REG_CHANNELS.index(key)
+        out: list[int] = []
+        T = reg_offsets.shape[0]
+        for s in samples:
+            f = int(s) // samples_per_frame
+            if 0 <= f < T:
+                shifted = int(s) + int(round(float(reg_offsets[f, ch])))
+            else:
+                shifted = int(s)
+            shifted = max(0, min(int(max_window) - 1, shifted))
+            out.append(shifted)
+        refined[key] = out
+    return refined

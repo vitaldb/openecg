@@ -42,3 +42,42 @@ def test_post_process_returns_uint8():
     out = post_process_frames(frames)
     assert out.dtype == np.uint8
     assert out.shape == frames.shape
+
+
+def test_apply_reg_to_boundaries_shifts_each_sample():
+    from ecgcode.stage2.infer import apply_reg_to_boundaries
+    import numpy as np
+    boundaries = {
+        "p_on":   [25],
+        "p_off":  [54],
+        "qrs_on": [60],
+        "qrs_off":[80],
+        "t_on":   [],
+        "t_off":  [],
+    }
+    reg = np.zeros((500, 6), dtype=np.float32)
+    reg[5, 0] = 2.0
+    reg[10, 1] = -3.0
+    reg[12, 2] = 1.0
+    reg[16, 3] = 0.0
+    refined = apply_reg_to_boundaries(boundaries, reg, samples_per_frame=5,
+                                       max_window=2500)
+    assert refined["p_on"]   == [27]
+    assert refined["p_off"]  == [51]
+    assert refined["qrs_on"] == [61]
+    assert refined["qrs_off"]== [80]
+
+
+def test_predict_frames_with_reg_shapes():
+    from ecgcode.stage2.model import FrameClassifierViTReg
+    from ecgcode.stage2.infer import predict_frames_with_reg
+    import numpy as np
+    model = FrameClassifierViTReg(
+        patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
+        use_lead_emb=False, pos_type="learnable",
+    )
+    sig = np.zeros(2500, dtype=np.float32)
+    frames, reg = predict_frames_with_reg(model, sig, lead_id=0, device="cpu")
+    assert frames.shape == (500,)
+    assert frames.dtype.name == "uint8"
+    assert reg.shape == (500, 6)
