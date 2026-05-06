@@ -57,20 +57,32 @@ def _latest_json(prefix):
     return json.loads(Path(files[-1]).read_text())
 
 
-def _ludb_f1(d):
-    if d is None: return float("nan")
-    for v in d.values():
-        if isinstance(v, dict) and "ludb_edge_filtered" in v:
-            return float(v["ludb_edge_filtered"])
+def _metric(d, experiment_key, metric_key, candidates=None):
+    """Look up `metric_key` from d[experiment_key], with optional fallback.
+
+    Each train_v12_*_<ts>.json has shape {"v9_q1c_pu_merge_ref": {...},
+    "<experiment_key>": {...}}, OR for the lambda sweep
+    {"v9_q1c_pu_merge_ref": {...}, "v12_reg_sweep": {...}, "v12_reg_best": {...}}.
+    Picking the first dict-valued entry would silently return the v9 reference
+    numbers (the bug in the original plan helper). We look up by exact key
+    instead, with a small candidate list for the lambda-sweep case.
+    """
+    if d is None:
+        return float("nan")
+    keys = [experiment_key] + list(candidates or [])
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, dict) and metric_key in v:
+            return float(v[metric_key])
     return float("nan")
 
 
-def _qtdb_f1(d):
-    if d is None: return float("nan")
-    for v in d.values():
-        if isinstance(v, dict) and "qtdb_pu0_random" in v:
-            return float(v["qtdb_pu0_random"])
-    return float("nan")
+def _ludb_f1(d, experiment_key, candidates=None):
+    return _metric(d, experiment_key, "ludb_edge_filtered", candidates)
+
+
+def _qtdb_f1(d, experiment_key, candidates=None):
+    return _metric(d, experiment_key, "qtdb_pu0_random", candidates)
 
 
 def _select_winners():
@@ -78,16 +90,22 @@ def _select_winners():
     reg = _latest_json("v12_reg")
     hub_ft = _latest_json("v12_hubert_ft")
     stm_ft = _latest_json("v12_stmem_ft")
-    soft_f1 = _ludb_f1(soft) if soft else 0.0
-    reg_f1 = _ludb_f1(reg) if reg else 0.0
+    # v12_reg.json keys the actual eval block under "v12_reg_best", not "v12_reg".
+    reg_keys = ["v12_reg_best"]
+    soft_f1 = _ludb_f1(soft, "v12_soft") if soft else 0.0
+    reg_f1 = _ludb_f1(reg, "v12_reg", candidates=reg_keys) if reg else 0.0
     use_soft = soft_f1 >= V9_LUDB_F1 + WIN_THRESHOLD
     use_reg = reg_f1 >= V9_LUDB_F1 + WIN_THRESHOLD
     if not (use_soft or use_reg):
         use_soft = soft_f1 >= reg_f1
         use_reg = not use_soft
-    hub_f1 = _ludb_f1(hub_ft); stm_f1 = _ludb_f1(stm_ft)
+    hub_f1 = _ludb_f1(hub_ft, "v12_hubert_ft")
+    stm_f1 = _ludb_f1(stm_ft, "v12_stmem_ft")
     if hub_f1 == stm_f1:
-        backbone = "hubert" if _qtdb_f1(hub_ft) >= _qtdb_f1(stm_ft) else "stmem"
+        backbone = "hubert" if (
+            _qtdb_f1(hub_ft, "v12_hubert_ft")
+            >= _qtdb_f1(stm_ft, "v12_stmem_ft")
+        ) else "stmem"
     else:
         backbone = "hubert" if hub_f1 > stm_f1 else "stmem"
     return {
