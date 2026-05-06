@@ -36,11 +36,13 @@ from ecgcode.stage2.soft_labels import SoftLabelDataset
 from ecgcode.stage2.ssl.head import BackboneWithHeads
 from ecgcode.stage2.ssl.hubert import HUBERT_DEFAULT_MODEL_ID, HubertECGAdapter
 from ecgcode.stage2.ssl.stmem import STMEMAdapter
+from ecgcode.stage2.soft_labels import soft_boundary_labels
 from ecgcode.stage2.train import (
     TrainConfig, boundary_l1_loss, kl_cross_entropy, load_checkpoint,
     run_eval, run_eval_reg, save_checkpoint, score_val_metrics,
 )
 from scripts.train_v9_q1c_pu_merge import _ConcatWithCounts, eval_all
+from scripts.train_v12_reg import _eval_all as _eval_all_reg
 
 CKPT_DIR = REPO / "data" / "checkpoints"
 OUT_DIR = REPO / "out"
@@ -200,9 +202,15 @@ def main():
                 labels = labels.to(device); reg_t = reg_t.to(device).float(); reg_m = reg_m.to(device).bool()
                 cls, reg = model(sigs, leads)
                 if winners["use_soft"]:
-                    soft = torch.nn.functional.one_hot(
-                        labels.clamp(0, 3), num_classes=4
-                    ).float()
+                    # Build TRUE soft labels per-sample using soft_boundary_labels
+                    # (ignore_index → all-zero row, transitions → 70/30 mix).
+                    # NOT one-hot: that drops Approach A's softening and
+                    # mistrains ignore frames as class 3.
+                    labels_np = labels.cpu().numpy()
+                    soft = torch.from_numpy(np.stack([
+                        soft_boundary_labels(labels_np[i])
+                        for i in range(labels_np.shape[0])
+                    ])).to(device)
                     cls_loss = kl_cross_entropy(cls, soft, weight=cw)
                 else:
                     cls_loss = torch.nn.functional.cross_entropy(
@@ -241,7 +249,10 @@ def main():
     if ckpt_path.exists():
         load_checkpoint(ckpt_path, model)
     model = model.to(device).train(False)
-    res = eval_all(model, device)
+    # When use_reg=True the model returns (cls, reg) tuples and v9's
+    # eval_all (which calls predict_frames -> .argmax on the output)
+    # would crash. Use the reg-aware variant from train_v12_reg.
+    res = _eval_all_reg(model, device) if winners["use_reg"] else eval_all(model, device)
     print(f"\n=== v12_best eval ===", flush=True)
     for k, v in res.items(): print(f"  {k}: {v:.3f}")
 
