@@ -45,11 +45,11 @@ Headline numbers come from the current best checkpoint, **`stage2_v12_reg.pt`** 
 
 | Dataset (eval split) | OpenECG v12_reg | Reference SOTA |
 |---|---|---|
-| **ISP test** | **0.967** | SemiSegECG 2025 (semi-supervised) ≈ 0.97 |
-| **LUDB val** | **0.949** | DENS-ECG / Moskalenko 2020 ≈ 0.97 |
-| **QTDB pu0** | **0.827** | Martinez 2004 wavelet ≈ 0.97 (T-annotated subset only) |
+| **ISP test** | **0.966** | SemiSegECG 2025 (semi-supervised) ≈ 0.97 |
+| **LUDB val** | **0.947** | DENS-ECG / Moskalenko 2020 ≈ 0.97 |
+| **QTDB pu0** | **0.847** | Martinez 2004 wavelet ≈ 0.97 (T-annotated subset only) |
 
-The boundary-regression head is the largest single jump in the program (+0.026 LUDB / +0.024 ISP / +0.048 QTDB over the v9 classifier-only baseline). Median boundary timing error is **≤20 ms on every wave on every dataset**, meeting the clinical spec target. Full design notes and the comparison vs prior internal versions are in `docs/superpowers/specs/2026-05-06-v12-postmortem.md`. Run `scripts/sota_comparison.py` to reproduce per-boundary breakdowns.
+The boundary-regression head is the largest single jump in the program. Median boundary timing error is **≤20 ms on every wave on every dataset**, meeting the clinical spec target. Full design notes are in `docs/superpowers/specs/2026-05-06-v12-postmortem.md`; the QTDB +0.020 lift over the original v12_reg comes from `fix(qtdb): density-based window selection`, which corrected a label-window bug that had silenced ~12 % of q1c records during training (`scripts/verify_qtdb_fix.py`). Run `scripts/sota_comparison.py` to reproduce per-boundary breakdowns.
 
 Single-lead robustness across the 12 LUDB leads is documented in `scripts/per_lead_v4.py`; lead III and aVL are the physiologically expected weak spots (small P / T amplitude due to axis orthogonality), which are uncommon as sole monitoring leads in clinical practice.
 
