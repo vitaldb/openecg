@@ -2,7 +2,7 @@
 import numpy as np
 from scipy import signal as scipy_signal
 
-from ecgcode import pacer
+from openecg import pacer
 
 FS = 500
 

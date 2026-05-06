@@ -5,8 +5,8 @@ import scipy.signal as scipy_signal
 import torch
 from torch.utils.data import Dataset
 
-from ecgcode import eval as ee
-from ecgcode import ludb
+from openecg import eval as ee
+from openecg import ludb
 
 FS_NATIVE = 500
 FS_INPUT = 250
@@ -102,7 +102,7 @@ class BoundaryMaskedDataset(Dataset):
     """
 
     def __init__(self, base, mask_frames=100, ignore_index=None):
-        from ecgcode import eval as ee
+        from openecg import eval as ee
         self.base = base
         self.mask_frames = int(mask_frames)
         self.ignore_index = ee.IGNORE_INDEX if ignore_index is None else int(ignore_index)
@@ -148,7 +148,7 @@ class LUDBFrameDatasetAugmented(LUDBFrameDataset):
         labels_np = labels.numpy()
 
         if self.max_shift > 0:
-            from ecgcode.stage2.augment import time_shift_aligned
+            from openecg.stage2.augment import time_shift_aligned
             max_shift_ms = int(round(self.max_shift * 1000.0 / FS_INPUT))
             sig_np, labels_np = time_shift_aligned(
                 sig_np, labels_np, fs_sig=FS_INPUT, frame_ms=FRAME_MS,

@@ -20,14 +20,14 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ecgcode import eval as ee, isp, ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.infer import (
+from openecg import eval as ee, isp, ludb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.infer import (
     extract_boundaries, post_process_frames, predict_frames,
 )
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.multi_dataset import CombinedFrameDataset
-from ecgcode.stage2.train import TrainConfig, fit, load_checkpoint
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.multi_dataset import CombinedFrameDataset
+from openecg.stage2.train import TrainConfig, fit, load_checkpoint
 
 CKPT_DIR = Path("data/checkpoints")
 OUT_DIR = Path("out")
@@ -110,7 +110,7 @@ def evaluate_isp(model, device, shift):
             except Exception:
                 continue
             for lead_idx, lead in enumerate(isp.LEADS_12):
-                from ecgcode.stage2.multi_dataset import _decimate_to_250, _normalize
+                from openecg.stage2.multi_dataset import _decimate_to_250, _normalize
                 sig_1000 = record[lead]
                 sig_250 = _decimate_to_250(sig_1000, 1000)
                 sig_n = _normalize(sig_250)

@@ -29,14 +29,14 @@ import torch
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
-from ecgcode.stage2.infer import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
+from openecg.stage2.infer import (
     extract_boundaries, load_model_bundle,
     post_process_frames, predict_frames,
 )
-from ecgcode.stage2.multi_dataset import _decimate_to_250, _normalize
+from openecg.stage2.multi_dataset import _decimate_to_250, _normalize
 
 CKPT = REPO / "data" / "checkpoints" / "stage2_v4_C.pt"
 OUT_DIR = REPO / "out"

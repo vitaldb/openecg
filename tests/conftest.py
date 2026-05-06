@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from ecgcode.delineate import DelineateResult
+from openecg.delineate import DelineateResult
 
 
 def _arr(*xs):

@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 import torch
 
-from ecgcode import eval as ee
-from ecgcode.stage2.reg_targets import (
+from openecg import eval as ee
+from openecg.stage2.reg_targets import (
     REG_CHANNELS, boundary_regression_targets,
 )
 
@@ -49,7 +49,7 @@ def test_ignore_index_zeros_target_and_mask():
 
 import torch
 
-from ecgcode.stage2.reg_targets import RegLabelDataset
+from openecg.stage2.reg_targets import RegLabelDataset
 
 
 class _HardDS:

@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ecgcode import codec, delineate, eval as ee, labeler, pacer, qtdb
-from ecgcode.stage2.infer import load_model, predict_frames
+from openecg import codec, delineate, eval as ee, labeler, pacer, qtdb
+from openecg.stage2.infer import load_model, predict_frames
 
 CKPT_PATH = Path("data/checkpoints/stage2_v1.pt")
 OUT_DIR = Path("out")

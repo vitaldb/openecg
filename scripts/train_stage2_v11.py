@@ -8,10 +8,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ecgcode import ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset, LUDBFrameDatasetAugmented, compute_class_weights
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import TrainConfig, fit
+from openecg import ludb
+from openecg.stage2.dataset import LUDBFrameDataset, LUDBFrameDatasetAugmented, compute_class_weights
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import TrainConfig, fit
 
 CKPT_PATH = Path("data/checkpoints/stage2_v11.pt")
 

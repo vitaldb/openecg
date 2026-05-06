@@ -1,8 +1,39 @@
 [project]
-name = "ecgcode"
+name = "openecg"
 version = "0.1.0"
-description = "Clinically-grounded discrete tokenization for electrocardiograms"
+description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Hyung-Chul Lee", email = "vital@snu.ac.kr" },
+]
+keywords = [
+    "ecg",
+    "electrocardiogram",
+    "tokenization",
+    "segmentation",
+    "delineation",
+    "p-wave",
+    "qrs",
+    "t-wave",
+    "deep-learning",
+    "biomedical",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
@@ -13,9 +44,16 @@ dependencies = [
     "huggingface-hub>=0.20",
 ]
 
+[project.urls]
+Homepage = "https://github.com/vitaldb/openecg"
+Repository = "https://github.com/vitaldb/openecg"
+Issues = "https://github.com/vitaldb/openecg/issues"
+
 [dependency-groups]
 dev = [
     "pytest>=7.4",
+    "build>=1.2",
+    "twine>=5.1",
 ]
 
 [build-system]
@@ -23,7 +61,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["ecgcode"]
+packages = ["openecg"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "openecg/**",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,6 +1,43 @@
-# ECGCode
+# OpenECG
 
-*Clinically-grounded discrete tokenization for electrocardiograms.*
+*Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms.*
+
+[![PyPI](https://img.shields.io/pypi/v/openecg.svg)](https://pypi.org/project/openecg/)
+[![Python](https://img.shields.io/pypi/pyversions/openecg.svg)](https://pypi.org/project/openecg/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+OpenECG ships:
+
+- A 13-symbol RLE token format (`openecg.codec`, `openecg.vocab`) that compresses 12-lead ECGs into a clinically interpretable sequence.
+- A pretrained Conv+Transformer per-frame wave classifier (`openecg.stage2`) trained on LUDB + QTDB + ISP that reaches near-SOTA P / QRS / T boundary F1 on ISP test (qrs_on F1 = 0.99).
+- Loaders and converters for **LUDB**, **QTDB**, and **ISP** datasets so you can reproduce every number in this README.
+
+## Install
+
+```bash
+pip install openecg
+```
+
+PyTorch is a runtime dependency. On CUDA boxes, install the matching wheel first (`pip install torch --index-url https://download.pytorch.org/whl/cu124`).
+
+## Quickstart
+
+```python
+from openecg import codec, vocab
+
+# Tokenise a hand-built event stream of (sym_id, length_ms) tuples.
+events = [
+    (vocab.ID_ISO, 200), (vocab.ID_P, 80),  (vocab.ID_ISO, 80),
+    (vocab.ID_Q,   20),  (vocab.ID_R, 40),  (vocab.ID_S, 40),
+    (vocab.ID_ISO, 120), (vocab.ID_T, 200), (vocab.ID_ISO, 220),
+]
+packed = codec.encode(events)              # uint16 array (RLE pack)
+print(codec.render_compact(events))        # one char per event
+print(codec.render_timed(events, 20))      # char count proportional to ms
+print(codec.decode(packed) == events)      # round-trip
+```
+
+For wave segmentation on a real ECG signal (10s, 250 Hz, single lead → per-frame P/QRS/T/other labels), use `openecg.stage2.infer.predict_frames` after loading a checkpoint with `load_model`. End-to-end examples: `scripts/validate_v4_lit_metrics.py`, `scripts/sota_comparison.py`.
 
 ## Status
 
@@ -127,7 +164,7 @@ Median timing error in ms (spec target ≤20ms): C achieves 8–20ms on every bo
 | Signal-aware trim k=2.0 | 0.628 (+17ms) | 0.830 (+10ms) |
 | **Fixed -22ms shift** | **0.737 (+6ms)** | **0.911 (+1ms)** |
 
-Per-checkpoint shifts now in `ecgcode/stage2/infer.py`: `BOUNDARY_SHIFT_C = {"p_off": -22}` and `BOUNDARY_SHIFT_F = {"p_off": -15}` (F has smaller +14ms bias). Use with the new `extract_boundaries(frames, boundary_shift_ms=BOUNDARY_SHIFT_C)` helper. With C+shift, LUDB val avg Martinez F1 rises 0.757 → 0.779 (+0.022); ISP test 0.911 → 0.922 (+0.011). p_off is no longer the LUDB outlier; remaining gap to DENS-ECG is uniform ~7-14pp Se across P/QRS/T (likely capacity / data scale).
+Per-checkpoint shifts now in `openecg/stage2/infer.py`: `BOUNDARY_SHIFT_C = {"p_off": -22}` and `BOUNDARY_SHIFT_F = {"p_off": -15}` (F has smaller +14ms bias). Use with the new `extract_boundaries(frames, boundary_shift_ms=BOUNDARY_SHIFT_C)` helper. With C+shift, LUDB val avg Martinez F1 rises 0.757 → 0.779 (+0.022); ISP test 0.911 → 0.922 (+0.011). p_off is no longer the LUDB outlier; remaining gap to DENS-ECG is uniform ~7-14pp Se across P/QRS/T (likely capacity / data scale).
 
 Signal-aware trim was less effective because P-wave's gradual return to baseline isn't crisply distinguishable from baseline noise at the std level. The bias is the model learning to extend P inclusively — fixing it via a learned p_off head (Stage 3 boundary refinement) is the principled path; the shift is a deployment workaround.
 
@@ -153,7 +190,7 @@ Signal-aware trim was less effective because P-wave's gradual return to baseline
 
 C on the T-annotated subset reaches QRS F1 ~0.96 vs Martinez QTDB ~0.99 — within 0.03 of literature SOTA. Use the T-subset numbers when comparing to QTDB-based papers.
 
-**Post-processing defaults tuned**: `scripts/tune_postproc_v4.py` swept `min_duration_ms × merge_gap_ms` on LUDB val and found `(60, 200)` beats the previous `(40, 300)` by avg +0.010 boundary F1 on C and +0.022 on F. Defaults updated in `ecgcode/stage2/infer.py`. The remaining LUDB gap to literature (~0.10) is from model capacity / data scale, not post-proc tuning.
+**Post-processing defaults tuned**: `scripts/tune_postproc_v4.py` swept `min_duration_ms × merge_gap_ms` on LUDB val and found `(60, 200)` beats the previous `(40, 300)` by avg +0.010 boundary F1 on C and +0.022 on F. Defaults updated in `openecg/stage2/infer.py`. The remaining LUDB gap to literature (~0.10) is from model capacity / data scale, not post-proc tuning.
 
 ### Stage 2 v4 — per-lead robustness (12 leads on LUDB val)
 
@@ -177,7 +214,7 @@ Per-lead median timing error meets the ≤20ms spec target on QRS (8–12ms acro
 ```bash
 uv sync
 $env:UV_LINK_MODE = "copy"     # Windows + OneDrive workaround
-$env:ECGCODE_LUDB_ZIP = "<path-to-LUDB-zip>"
+$env:OPENECG_LUDB_ZIP = "<path-to-LUDB-zip>"
 
 uv run pytest                              # 65 tests (50 unit + 15 stage2 + LUDB integration if env set)
 

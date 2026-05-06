@@ -1,4 +1,4 @@
-# ecgcode/stage2/multi_dataset.py
+# openecg/stage2/multi_dataset.py
 """Combined LUDB + QTDB + ISP dataset for v3 training.
 
 Each sequence: 10s window @ 250Hz (2500 samples), z-normalized, with lead_id and frame_labels (50Hz, 500 frames).
@@ -9,8 +9,8 @@ import scipy.signal as scipy_signal
 import torch
 from torch.utils.data import Dataset
 
-from ecgcode import eval as ee
-from ecgcode import isp, ludb, qtdb
+from openecg import eval as ee
+from openecg import isp, ludb, qtdb
 
 FRAME_MS = 20
 WINDOW_SAMPLES = 2500       # 10s @ 250Hz
@@ -223,7 +223,7 @@ class CombinedFrameDatasetAugmented(CombinedFrameDataset):
         self.rng = np.random.default_rng(seed)
 
     def __getitem__(self, idx):
-        from ecgcode.stage2.augment import randaugment_ecg
+        from openecg.stage2.augment import randaugment_ecg
         sig, lead_idx, labels = super().__getitem__(idx)
         sig_np = sig.numpy()
         sig_np = randaugment_ecg(sig_np, fs=250, n_ops=self.n_ops, rng=self.rng)
@@ -609,7 +609,7 @@ class CombinedFrameDatasetTimeAugmented(CombinedFrameDataset):
         self.rng = np.random.default_rng(seed)
 
     def __getitem__(self, idx):
-        from ecgcode.stage2.augment import randaugment_ecg, time_axis_augment
+        from openecg.stage2.augment import randaugment_ecg, time_axis_augment
         sig, lead_idx, labels = super().__getitem__(idx)
         sig_np = sig.numpy()
         labels_np = labels.numpy()

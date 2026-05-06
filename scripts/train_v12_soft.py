@@ -15,14 +15,14 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.model import FrameClassifierViT
-from ecgcode.stage2.multi_dataset import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.model import FrameClassifierViT
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.soft_labels import SoftLabelDataset
-from ecgcode.stage2.train import TrainConfig, fit_kl, load_checkpoint
+from openecg.stage2.soft_labels import SoftLabelDataset
+from openecg.stage2.train import TrainConfig, fit_kl, load_checkpoint
 # Reuse v9 eval helpers exactly so numbers are directly comparable
 from scripts.train_v9_q1c_pu_merge import _ConcatWithCounts, eval_all, KWARGS
 

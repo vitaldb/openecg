@@ -2,7 +2,7 @@
 """Run full pipeline on every LUDB record x lead -> ludb_tokens.npz.
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/tokenize_ludb.py
 """
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ecgcode import codec, delineate, labeler, ludb, pacer, vocab
+from openecg import codec, delineate, labeler, ludb, pacer, vocab
 
 OUT_PATH = Path("data/ludb_tokens.npz")
 

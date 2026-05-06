@@ -2,7 +2,7 @@
 """Run validation pipeline with each NK delineate method, report comparison.
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/ablate_methods.py
 """
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ecgcode import delineate, eval as ee, labeler, ludb, pacer, vocab
+from openecg import delineate, eval as ee, labeler, ludb, pacer, vocab
 
 METHODS = ["dwt", "cwt", "peak", "prominence"]
 FS = 500

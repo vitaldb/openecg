@@ -164,7 +164,7 @@ JSON verbose  : [{"sym":"iso","ms":128}, {"sym":"P","ms":92}, ...]
 ### Codec 인터페이스
 
 ```python
-# ecgcode/codec.py
+# openecg/codec.py
 def encode(events: list[tuple[int, int]]) -> np.ndarray  # uint16
 def decode(packed: np.ndarray) -> list[tuple[int, int]]
 def to_frames(events, frame_ms=20, total_ms=None) -> np.ndarray  # uint8 per-frame
@@ -367,7 +367,7 @@ Frame F1 / boundary error를 두 가지로 계산:
 ### 알고리즘 (highpass + adaptive threshold)
 
 ```python
-# ecgcode/pacer.py
+# openecg/pacer.py
 from scipy.signal import butter, filtfilt, find_peaks
 
 def detect_spikes(

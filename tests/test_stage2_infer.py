@@ -1,6 +1,6 @@
 import numpy as np
 
-from ecgcode.stage2.infer import post_process_frames
+from openecg.stage2.infer import post_process_frames
 
 
 def test_post_process_removes_short_segments():
@@ -45,7 +45,7 @@ def test_post_process_returns_uint8():
 
 
 def test_apply_reg_to_boundaries_shifts_each_sample():
-    from ecgcode.stage2.infer import apply_reg_to_boundaries
+    from openecg.stage2.infer import apply_reg_to_boundaries
     import numpy as np
     boundaries = {
         "p_on":   [25],
@@ -69,8 +69,8 @@ def test_apply_reg_to_boundaries_shifts_each_sample():
 
 
 def test_predict_frames_with_reg_shapes():
-    from ecgcode.stage2.model import FrameClassifierViTReg
-    from ecgcode.stage2.infer import predict_frames_with_reg
+    from openecg.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.infer import predict_frames_with_reg
     import numpy as np
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,

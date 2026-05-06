@@ -89,7 +89,7 @@ Use `ecgcode.eval.gt_to_super_frames` (already exists).
 ## 5. Model architecture
 
 ```python
-# ecgcode/stage2/model.py
+# openecg/stage2/model.py
 class FrameClassifier(nn.Module):
     def __init__(self, n_leads=12, d_model=64, n_heads=4, n_layers=4, ff=256, n_classes=4):
         super().__init__()

@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from ecgcode import eval as ecg_eval
+from openecg import eval as ecg_eval
 
 
 @dataclass
@@ -82,7 +82,7 @@ def train_one_epoch(model, loader, optimizer, class_weights, device,
 
 @torch.no_grad()
 def run_eval(model, loader, device):
-    """Run val pass; return per-class F1 (using ecgcode.eval.frame_f1)."""
+    """Run val pass; return per-class F1 (using openecg.eval.frame_f1)."""
     model.eval()
     all_pred = []
     all_true = []

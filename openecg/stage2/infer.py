@@ -1,12 +1,12 @@
-﻿# ecgcode/stage2/infer.py
+﻿# openecg/stage2/infer.py
 """Stage 2 inference: checkpoint to per-frame predictions for validation."""
 
 import numpy as np
 import torch
 
-from ecgcode import codec
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import load_checkpoint, load_checkpoint_blob
+from openecg import codec
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import load_checkpoint, load_checkpoint_blob
 
 
 def infer_model_config_from_state_dict(state_dict):
@@ -107,7 +107,7 @@ def predict_to_boundaries(
         frames = post_process_frames(frames, frame_ms=frame_ms, **(postprocess_kwargs or {}))
     boundaries = extract_boundaries(frames, fs=fs, frame_ms=frame_ms)
     if refine:
-        from ecgcode.stage2.refiner import refine_boundaries
+        from openecg.stage2.refiner import refine_boundaries
         boundaries = refine_boundaries(sig, boundaries, fs=fs, **(refine_kwargs or {}))
     return boundaries
 

@@ -1,6 +1,6 @@
 import numpy as np
 
-from ecgcode.stage2.augment import (
+from openecg.stage2.augment import (
     amplitude_scaling,
     powerline_noise,
     randaugment_ecg,

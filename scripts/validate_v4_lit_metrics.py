@@ -25,13 +25,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ecgcode import eval as ee, isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.evaluate import boundary_metrics_by_key
-from ecgcode.stage2.infer import post_process_frames, predict_frames
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.multi_dataset import CombinedFrameDataset
-from ecgcode.stage2.train import TrainConfig, fit, load_checkpoint
+from openecg import eval as ee, isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.evaluate import boundary_metrics_by_key
+from openecg.stage2.infer import post_process_frames, predict_frames
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.multi_dataset import CombinedFrameDataset
+from openecg.stage2.train import TrainConfig, fit, load_checkpoint
 
 OUT_DIR = Path("out")
 CKPT_DIR = Path("data/checkpoints")

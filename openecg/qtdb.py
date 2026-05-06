@@ -1,8 +1,8 @@
-# ecgcode/qtdb.py
+# openecg/qtdb.py
 """QTDB (Physionet QT Database) loader for cross-DB validation.
 
-Expects ECGCODE_QTDB_ZIP env var pointing to QTDB zip file.
-Extracts to ECGCODE_QTDB_CACHE (default: ~/.cache/ecgcode/qtdb).
+Expects OPENECG_QTDB_ZIP env var pointing to QTDB zip file.
+Extracts to OPENECG_QTDB_CACHE (default: ~/.cache/openecg/qtdb).
 """
 
 import os
@@ -16,20 +16,20 @@ QTDB_INNER_DIR = "qt-database-1.0.0"
 
 
 def _zip_path() -> Path:
-    p = os.environ.get("ECGCODE_QTDB_ZIP")
+    p = os.environ.get("OPENECG_QTDB_ZIP")
     if not p:
         raise FileNotFoundError(
-            "Set ECGCODE_QTDB_ZIP env var to QTDB zip file path. "
+            "Set OPENECG_QTDB_ZIP env var to QTDB zip file path. "
             "Download from https://physionet.org/content/qtdb/"
         )
     return Path(p)
 
 
 def _cache_path() -> Path:
-    p = os.environ.get("ECGCODE_QTDB_CACHE")
+    p = os.environ.get("OPENECG_QTDB_CACHE")
     if p:
         return Path(p).expanduser()
-    return Path.home() / ".cache" / "ecgcode" / "qtdb"
+    return Path.home() / ".cache" / "openecg" / "qtdb"
 
 
 def ensure_extracted() -> Path:

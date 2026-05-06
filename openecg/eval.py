@@ -5,7 +5,7 @@ Spec: docs/superpowers/specs/2026-05-03-ecgcode-stage1-design.md §7
 
 import numpy as np
 
-from ecgcode import vocab
+from openecg import vocab
 
 # Supercategory IDs for LUDB-compat 4-class comparison
 SUPER_OTHER = 0
@@ -153,7 +153,7 @@ def _empty_boundary_result():
 def events_to_super_frames(events, n_samples, fs=500, frame_ms=20):
     """Pipeline events → per-frame supercategory array.
     Used by validate_v1.py and ablate_methods.py."""
-    from ecgcode import codec
+    from openecg import codec
     total_ms = round(n_samples * 1000.0 / fs)
     frames = codec.to_frames(events, frame_ms=frame_ms, total_ms=total_ms)
     return to_supercategory(frames)

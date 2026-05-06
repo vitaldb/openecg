@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ecgcode import eval as ee
+from openecg import eval as ee
 
 
 def soft_boundary_labels(

@@ -14,20 +14,20 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.evaluate import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.evaluate import (
     MARTINEZ_TOLERANCE_MS,
     average_boundary_f1,
     boundary_metrics_by_key,
 )
-from ecgcode.stage2.infer import (
+from openecg.stage2.infer import (
     extract_boundaries,
     load_model_bundle,
     post_process_frames,
     predict_frames,
 )
-from ecgcode.stage2.refiner import refine_boundaries
+from openecg.stage2.refiner import refine_boundaries
 
 
 CKPT_DIR = Path("data/checkpoints")
@@ -216,9 +216,9 @@ def main():
     args = parser.parse_args()
 
     domain_fns = {
-        "ludb": ("ECGCODE_LUDB_ZIP", evaluate_ludb),
-        "isp": ("ECGCODE_ISP_ZIP", evaluate_isp),
-        "qtdb": ("ECGCODE_QTDB_ZIP", evaluate_qtdb),
+        "ludb": ("OPENECG_LUDB_ZIP", evaluate_ludb),
+        "isp": ("OPENECG_ISP_ZIP", evaluate_isp),
+        "qtdb": ("OPENECG_QTDB_ZIP", evaluate_qtdb),
     }
     refine_kwargs = {
         "search_ms": args.search_ms,

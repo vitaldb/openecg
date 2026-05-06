@@ -1,7 +1,7 @@
 # tests/test_integration.py
 """End-to-end integration test on LUDB record 1.
 
-Skipped if ECGCODE_LUDB_ZIP env var not set or extraction fails.
+Skipped if OPENECG_LUDB_ZIP env var not set or extraction fails.
 """
 
 import os
@@ -9,16 +9,16 @@ import os
 import numpy as np
 import pytest
 
-LUDB_AVAILABLE = bool(os.environ.get("ECGCODE_LUDB_ZIP"))
+LUDB_AVAILABLE = bool(os.environ.get("OPENECG_LUDB_ZIP"))
 
 pytestmark = pytest.mark.skipif(
     not LUDB_AVAILABLE,
-    reason="ECGCODE_LUDB_ZIP env var not set; integration test requires LUDB",
+    reason="OPENECG_LUDB_ZIP env var not set; integration test requires LUDB",
 )
 
 
 def test_record_1_lead_ii_end_to_end():
-    from ecgcode import codec, delineate, labeler, ludb, pacer
+    from openecg import codec, delineate, labeler, ludb, pacer
 
     record = ludb.load_record(1)
     sig = record["ii"]
@@ -44,7 +44,7 @@ def test_record_1_lead_ii_end_to_end():
 
 
 def test_all_12_leads_record_1_no_crash():
-    from ecgcode import codec, delineate, labeler, ludb, pacer
+    from openecg import codec, delineate, labeler, ludb, pacer
 
     record = ludb.load_record(1)
     for lead, sig in record.items():
@@ -60,7 +60,7 @@ def test_all_12_leads_record_1_no_crash():
 def test_pacer_record_8_detects_spikes():
     """Record 8 is a pacemaker patient (per ludb.csv 'Cardiac pacing' column).
     Pacer detector should find at least one spike on lead V1 or II."""
-    from ecgcode import ludb, pacer
+    from openecg import ludb, pacer
 
     record = ludb.load_record(8)
     spike_counts = {lead: len(pacer.detect_spikes(sig, fs=500))

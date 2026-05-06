@@ -68,8 +68,8 @@ Each Phase 1 task is self-contained; Phase 2 reuses Phase 1's heads. Phase 3 dep
 import numpy as np
 import pytest
 
-from ecgcode import eval as ee
-from ecgcode.stage2.soft_labels import soft_boundary_labels
+from openecg import eval as ee
+from openecg.stage2.soft_labels import soft_boundary_labels
 
 
 def test_no_transitions_produces_one_hot():
@@ -120,7 +120,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'ecgcode.stage2.soft_l
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# ecgcode/stage2/soft_labels.py
+# openecg/stage2/soft_labels.py
 """Soft labels at frame transitions to soften per-frame CE at boundaries.
 
 Spec: docs/superpowers/specs/2026-05-06-v12-ssl-boundary-design.md §4.1
@@ -130,7 +130,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ecgcode import eval as ee
+from openecg import eval as ee
 
 
 def soft_boundary_labels(
@@ -200,8 +200,8 @@ git commit -m "v12 task 1: soft_boundary_labels helper"
 import numpy as np
 import torch
 
-from ecgcode.stage2.model import FrameClassifierViT
-from ecgcode.stage2.train import (
+from openecg.stage2.model import FrameClassifierViT
+from openecg.stage2.train import (
     kl_cross_entropy, train_one_epoch_kl,
 )
 
@@ -392,7 +392,7 @@ Append to `tests/test_stage2_soft_labels.py`:
 ```python
 import torch
 
-from ecgcode.stage2.soft_labels import SoftLabelDataset
+from openecg.stage2.soft_labels import SoftLabelDataset
 
 
 class _HardDS:
@@ -520,14 +520,14 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.model import FrameClassifierViT
-from ecgcode.stage2.multi_dataset import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.model import FrameClassifierViT
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.soft_labels import SoftLabelDataset
-from ecgcode.stage2.train import TrainConfig, fit_kl, load_checkpoint
+from openecg.stage2.soft_labels import SoftLabelDataset
+from openecg.stage2.train import TrainConfig, fit_kl, load_checkpoint
 # Reuse v9 eval helpers exactly so numbers are directly comparable
 from scripts.train_v9_q1c_pu_merge import _ConcatWithCounts, eval_all, KWARGS
 
@@ -641,7 +641,7 @@ Append to `tests/test_stage2_model.py`:
 
 ```python
 def test_vit_reg_forward_shape_cpu():
-    from ecgcode.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.model import FrameClassifierViTReg
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
         use_lead_emb=False, pos_type="learnable",
@@ -656,7 +656,7 @@ def test_vit_reg_forward_shape_cpu():
 
 
 def test_vit_reg_model_config_records_n_reg():
-    from ecgcode.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.model import FrameClassifierViTReg
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
         use_lead_emb=False, pos_type="learnable",
@@ -746,8 +746,8 @@ git commit -m "v12 task 5: FrameClassifierViTReg with parallel cls+reg heads"
 import numpy as np
 import pytest
 
-from ecgcode import eval as ee
-from ecgcode.stage2.reg_targets import (
+from openecg import eval as ee
+from openecg.stage2.reg_targets import (
     REG_CHANNELS, boundary_regression_targets,
 )
 
@@ -802,7 +802,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'ecgcode.stage2.reg_ta
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# ecgcode/stage2/reg_targets.py
+# openecg/stage2/reg_targets.py
 """Boundary regression targets for FrameClassifierViTReg.
 
 Spec: docs/superpowers/specs/2026-05-06-v12-ssl-boundary-design.md §4.2
@@ -812,7 +812,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ecgcode import eval as ee
+from openecg import eval as ee
 
 
 REG_CHANNELS = ("p_on", "p_off", "qrs_on", "qrs_off", "t_on", "t_off")
@@ -910,7 +910,7 @@ Append to `tests/test_stage2_reg_targets.py`:
 ```python
 import torch
 
-from ecgcode.stage2.reg_targets import RegLabelDataset
+from openecg.stage2.reg_targets import RegLabelDataset
 
 
 class _HardDS:
@@ -943,7 +943,7 @@ Append to `tests/test_stage2_train_v12.py`:
 
 ```python
 def test_boundary_l1_loss_masked():
-    from ecgcode.stage2.train import boundary_l1_loss
+    from openecg.stage2.train import boundary_l1_loss
     pred = torch.tensor([[[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]]])
     target = torch.tensor([[[3.0, 0.0, 0.0, 0.0, 0.0, 0.0]]])
     mask = torch.tensor([[[True, False, False, False, False, False]]])
@@ -952,8 +952,8 @@ def test_boundary_l1_loss_masked():
 
 
 def test_train_one_epoch_reg_loss_decreases():
-    from ecgcode.stage2.model import FrameClassifierViTReg
-    from ecgcode.stage2.train import train_one_epoch_reg
+    from openecg.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.train import train_one_epoch_reg
     torch.manual_seed(0)
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
@@ -1174,7 +1174,7 @@ Append to `tests/test_stage2_infer.py`:
 
 ```python
 def test_apply_reg_to_boundaries_shifts_each_sample():
-    from ecgcode.stage2.infer import apply_reg_to_boundaries
+    from openecg.stage2.infer import apply_reg_to_boundaries
     import numpy as np
     boundaries = {
         "p_on":   [25],
@@ -1198,8 +1198,8 @@ def test_apply_reg_to_boundaries_shifts_each_sample():
 
 
 def test_predict_frames_with_reg_shapes():
-    from ecgcode.stage2.model import FrameClassifierViTReg
-    from ecgcode.stage2.infer import predict_frames_with_reg
+    from openecg.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.infer import predict_frames_with_reg
     import numpy as np
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
@@ -1313,19 +1313,19 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
-from ecgcode.stage2.infer import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
+from openecg.stage2.infer import (
     apply_reg_to_boundaries, extract_boundaries,
     post_process_frames, predict_frames_with_reg,
 )
-from ecgcode.stage2.model import FrameClassifierViTReg
-from ecgcode.stage2.multi_dataset import (
+from openecg.stage2.model import FrameClassifierViTReg
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset, _decimate_to_250, _normalize,
 )
-from ecgcode.stage2.reg_targets import RegLabelDataset
-from ecgcode.stage2.train import TrainConfig, fit_reg, load_checkpoint
+from openecg.stage2.reg_targets import RegLabelDataset
+from openecg.stage2.train import TrainConfig, fit_reg, load_checkpoint
 from scripts.train_v9_q1c_pu_merge import KWARGS, _ConcatWithCounts
 
 CKPT_DIR = REPO / "data" / "checkpoints"
@@ -1596,7 +1596,7 @@ Expected: installs `transformers` and `huggingface_hub`.
 - [ ] **Step 3: Create the package marker**
 
 ```python
-# ecgcode/stage2/ssl/__init__.py
+# openecg/stage2/ssl/__init__.py
 """Open-weight ECG SSL backbones adapted to the Stage 2 pipeline.
 
 Spec: docs/superpowers/specs/2026-05-06-v12-ssl-boundary-design.md §5.
@@ -1606,7 +1606,7 @@ Spec: docs/superpowers/specs/2026-05-06-v12-ssl-boundary-design.md §5.
 - [ ] **Step 4: Verify import**
 
 ```
-python -c "import ecgcode.stage2.ssl; print('ssl package OK')"
+python -c "import openecg.stage2.ssl; print('ssl package OK')"
 ```
 
 Expected: `ssl package OK`.
@@ -1633,7 +1633,7 @@ git commit -m "v12 task 10: add HuggingFace deps + ssl package scaffold"
 import torch
 from torch import nn
 
-from ecgcode.stage2.ssl.head import (
+from openecg.stage2.ssl.head import (
     BackboneWithHeads, FrameHead, FrameRegHead,
 )
 
@@ -1691,7 +1691,7 @@ Expected: FAIL with `ModuleNotFoundError`.
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# ecgcode/stage2/ssl/head.py
+# openecg/stage2/ssl/head.py
 """Shared classification + regression heads for SSL backbones."""
 
 from torch import nn
@@ -1784,17 +1784,17 @@ import os
 import pytest
 import torch
 
-from ecgcode.stage2.ssl.hubert import HubertECGAdapter, HUBERT_DEFAULT_MODEL_ID
+from openecg.stage2.ssl.hubert import HubertECGAdapter, HUBERT_DEFAULT_MODEL_ID
 
 
-HF_OK = os.environ.get("ECGCODE_RUN_HF_TESTS") == "1"
+HF_OK = os.environ.get("OPENECG_RUN_HF_TESTS") == "1"
 
 
 @pytest.mark.skipif(not HF_OK,
-                     reason="set ECGCODE_RUN_HF_TESTS=1 to download HuBERT-ECG weights")
+                     reason="set OPENECG_RUN_HF_TESTS=1 to download HuBERT-ECG weights")
 def test_hubert_adapter_forward_shape():
     """End-to-end shape check; downloads weights from HF.
-    Run with: ECGCODE_RUN_HF_TESTS=1 pytest tests/test_stage2_ssl_hubert.py
+    Run with: OPENECG_RUN_HF_TESTS=1 pytest tests/test_stage2_ssl_hubert.py
     """
     adapter = HubertECGAdapter(model_id=HUBERT_DEFAULT_MODEL_ID, device="cpu")
     sig = torch.randn(2, 2500)
@@ -1843,7 +1843,7 @@ Expected: FAIL with `ModuleNotFoundError`.
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# ecgcode/stage2/ssl/hubert.py
+# openecg/stage2/ssl/hubert.py
 """HuBERT-ECG adapter - wraps the HuggingFace HuBERT-style ECG encoder for
 single-lead 250 Hz / 10 s input.
 
@@ -1921,7 +1921,7 @@ Expected: 1 passed.
 Optional verification when network is available:
 
 ```
-ECGCODE_RUN_HF_TESTS=1 pytest tests/test_stage2_ssl_hubert.py -v
+OPENECG_RUN_HF_TESTS=1 pytest tests/test_stage2_ssl_hubert.py -v
 ```
 
 If the actual `Edoardo-BS/hubert_ecg_small` repo id differs, fix `HUBERT_DEFAULT_MODEL_ID` (use `huggingface-cli search hubert ecg` to find the canonical id) and re-run.
@@ -1965,18 +1965,18 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.multi_dataset import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.ssl.head import BackboneWithHeads
-from ecgcode.stage2.ssl.hubert import HUBERT_DEFAULT_MODEL_ID, HubertECGAdapter
-from ecgcode.stage2.train import (
+from openecg.stage2.ssl.head import BackboneWithHeads
+from openecg.stage2.ssl.hubert import HUBERT_DEFAULT_MODEL_ID, HubertECGAdapter
+from openecg.stage2.train import (
     TrainConfig, load_checkpoint, run_eval, save_checkpoint,
     score_val_metrics, train_one_epoch,
 )
-from ecgcode import eval as ecg_eval
+from openecg import eval as ecg_eval
 from scripts.train_v9_q1c_pu_merge import _ConcatWithCounts, eval_all
 
 CKPT_DIR = REPO / "data" / "checkpoints"
@@ -2144,7 +2144,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from ecgcode.stage2.ssl.stmem import STMEMAdapter
+from openecg.stage2.ssl.stmem import STMEMAdapter
 
 
 def test_stmem_adapter_replicate_path():
@@ -2190,7 +2190,7 @@ Expected: FAIL with `ModuleNotFoundError`.
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# ecgcode/stage2/ssl/stmem.py
+# openecg/stage2/ssl/stmem.py
 """ST-MEM adapter - wraps the spatiotemporal masked ECG ViT for our
 single-lead 250 Hz / 10 s pipeline.
 
@@ -2318,14 +2318,14 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.multi_dataset import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.ssl.head import BackboneWithHeads
-from ecgcode.stage2.ssl.stmem import STMEMAdapter
-from ecgcode.stage2.train import TrainConfig, load_checkpoint
+from openecg.stage2.ssl.head import BackboneWithHeads
+from openecg.stage2.ssl.stmem import STMEMAdapter
+from openecg.stage2.train import TrainConfig, load_checkpoint
 from scripts.train_v12_hubert import _fit_with_groups
 from scripts.train_v9_q1c_pu_merge import _ConcatWithCounts, eval_all
 
@@ -2482,18 +2482,18 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode import eval as ecg_eval
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.multi_dataset import (
+from openecg import isp, ludb, qtdb
+from openecg import eval as ecg_eval
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.reg_targets import RegLabelDataset
-from ecgcode.stage2.soft_labels import SoftLabelDataset
-from ecgcode.stage2.ssl.head import BackboneWithHeads
-from ecgcode.stage2.ssl.hubert import HUBERT_DEFAULT_MODEL_ID, HubertECGAdapter
-from ecgcode.stage2.ssl.stmem import STMEMAdapter
-from ecgcode.stage2.train import (
+from openecg.stage2.reg_targets import RegLabelDataset
+from openecg.stage2.soft_labels import SoftLabelDataset
+from openecg.stage2.ssl.head import BackboneWithHeads
+from openecg.stage2.ssl.hubert import HUBERT_DEFAULT_MODEL_ID, HubertECGAdapter
+from openecg.stage2.ssl.stmem import STMEMAdapter
+from openecg.stage2.train import (
     TrainConfig, boundary_l1_loss, kl_cross_entropy, load_checkpoint,
     run_eval, run_eval_reg, save_checkpoint, score_val_metrics,
 )

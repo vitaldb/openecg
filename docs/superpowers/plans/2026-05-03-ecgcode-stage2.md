@@ -11,7 +11,7 @@
 **Environment**:
 ```powershell
 $env:UV_LINK_MODE = "copy"
-$env:ECGCODE_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
+$env:OPENECG_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
 ```
 
 ---
@@ -187,12 +187,12 @@ import numpy as np
 import pytest
 import torch
 
-LUDB_AVAILABLE = bool(os.environ.get("ECGCODE_LUDB_ZIP"))
-pytestmark = pytest.mark.skipif(not LUDB_AVAILABLE, reason="ECGCODE_LUDB_ZIP not set")
+LUDB_AVAILABLE = bool(os.environ.get("OPENECG_LUDB_ZIP"))
+pytestmark = pytest.mark.skipif(not LUDB_AVAILABLE, reason="OPENECG_LUDB_ZIP not set")
 
 
 def test_dataset_basic_shapes():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1, 2])
     assert len(ds) > 0
     sig, lead_id, labels = ds[0]
@@ -206,7 +206,7 @@ def test_dataset_basic_shapes():
 
 
 def test_dataset_labels_in_supercategory_range():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1, 2])
     sig, lead_id, labels = ds[0]
     assert int(labels.min()) >= 0
@@ -214,7 +214,7 @@ def test_dataset_labels_in_supercategory_range():
 
 
 def test_dataset_signal_normalized():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1, 2])
     sig, _, _ = ds[0]
     assert abs(float(sig.mean())) < 0.1
@@ -222,7 +222,7 @@ def test_dataset_signal_normalized():
 
 
 def test_dataset_covers_all_leads():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1])
     leads_seen = set()
     for i in range(len(ds)):
@@ -232,7 +232,7 @@ def test_dataset_covers_all_leads():
 
 
 def test_compute_class_weights_inverse_sqrt():
-    from ecgcode.stage2.dataset import compute_class_weights
+    from openecg.stage2.dataset import compute_class_weights
     counts = np.array([600, 100, 100, 200], dtype=np.float64)
     weights = compute_class_weights(counts)
     assert weights[1] > weights[0]
@@ -259,7 +259,7 @@ Spec: docs/superpowers/specs/2026-05-03-ecgcode-stage2-design.md
 Create `ecgcode/stage2/dataset.py`:
 
 ```python
-# ecgcode/stage2/dataset.py
+# openecg/stage2/dataset.py
 """LUDB Stage 2 dataset: signal+lead_id to frame labels (4-class supercategory)."""
 
 import numpy as np
@@ -267,8 +267,8 @@ import scipy.signal as scipy_signal
 import torch
 from torch.utils.data import Dataset
 
-from ecgcode import eval as ee
-from ecgcode import ludb
+from openecg import eval as ee
+from openecg import ludb
 
 FS_NATIVE = 500
 FS_INPUT = 250
@@ -361,7 +361,7 @@ git commit -m "Add Stage 2 LUDBFrameDataset + class weights helper"
 # tests/test_stage2_model.py
 import torch
 
-from ecgcode.stage2.model import FrameClassifier
+from openecg.stage2.model import FrameClassifier
 
 
 def test_forward_shape_cpu():
@@ -417,7 +417,7 @@ Expected: 5 tests FAIL with ModuleNotFoundError.
 - [ ] **Step 3: Implement model.py**
 
 ```python
-# ecgcode/stage2/model.py
+# openecg/stage2/model.py
 """Stage 2 FrameClassifier: Conv + Transformer + Linear -> per-frame 4-class logits."""
 
 import torch
@@ -495,8 +495,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import (
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import (
     TrainConfig,
     train_one_epoch,
     save_checkpoint,
@@ -546,7 +546,7 @@ Expected: 2 tests FAIL.
 - [ ] **Step 3: Implement train.py**
 
 ```python
-# ecgcode/stage2/train.py
+# openecg/stage2/train.py
 """Stage 2 training loop with checkpointing and early stopping."""
 
 from dataclasses import dataclass, asdict
@@ -556,7 +556,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from ecgcode import eval as ee
+from openecg import eval as ee
 
 
 @dataclass
@@ -704,15 +704,15 @@ git commit -m "Add Stage 2 training loop (cosine schedule, early stop, checkpoin
 - [ ] **Step 1: Implement infer.py**
 
 ```python
-# ecgcode/stage2/infer.py
+# openecg/stage2/infer.py
 """Stage 2 inference: checkpoint to per-frame predictions for validation."""
 
 import numpy as np
 import torch
 
-from ecgcode import codec
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import load_checkpoint
+from openecg import codec
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import load_checkpoint
 
 
 def load_model(ckpt_path, device="cuda"):
@@ -742,7 +742,7 @@ def predict_to_events(model, sig, lead_id, device="cuda", frame_ms=20):
 
 ```powershell
 $env:UV_LINK_MODE = "copy"
-uv run python -c "from ecgcode.stage2.infer import load_model, predict_frames, predict_to_events; print('infer module imports OK')"
+uv run python -c "from openecg.stage2.infer import load_model, predict_frames, predict_to_events; print('infer module imports OK')"
 ```
 
 - [ ] **Step 3: Commit**
@@ -772,10 +772,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ecgcode import ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import TrainConfig, fit
+from openecg import ludb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import TrainConfig, fit
 
 CKPT_PATH = Path("data/checkpoints/stage2_v1.pt")
 
@@ -834,7 +834,7 @@ if __name__ == "__main__":
 
 ```powershell
 $env:UV_LINK_MODE = "copy"
-$env:ECGCODE_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
+$env:OPENECG_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
 uv run python scripts/train_stage2.py
 ```
 Expected: ~10-30 min on RTX 4090. Console shows per-epoch loss + val F1.
@@ -883,9 +883,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ecgcode import codec, delineate, eval as ee, labeler, ludb, pacer
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.infer import load_model, predict_frames
+from openecg import codec, delineate, eval as ee, labeler, ludb, pacer
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.infer import load_model, predict_frames
 
 CKPT_PATH = Path("data/checkpoints/stage2_v1.pt")
 OUT_DIR = Path("out")
@@ -1055,7 +1055,7 @@ if __name__ == "__main__":
 
 ```powershell
 $env:UV_LINK_MODE = "copy"
-$env:ECGCODE_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
+$env:OPENECG_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
 uv run python scripts/validate_stage2.py
 ```
 Expected: ~5 min runtime. Console shows model vs NK side-by-side. JSON saved.

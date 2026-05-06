@@ -2,13 +2,13 @@
 """Validate pacer spike detector: TPR on 10 pacemaker records, FPR on non-pacer.
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/validate_pacer.py
 """
 
 from collections import defaultdict
 
-from ecgcode import ludb, pacer
+from openecg import ludb, pacer
 
 FS = 500
 

@@ -10,7 +10,7 @@
 
 **Environment requirements (set before running tasks 7+)**:
 ```powershell
-$env:ECGCODE_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
+$env:OPENECG_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
 ```
 
 ---
@@ -88,7 +88,7 @@ addopts = "-v --tb=short"
 - [ ] **Step 2: Create empty package**
 
 ```python
-# ecgcode/__init__.py
+# openecg/__init__.py
 __version__ = "0.1.0"
 ```
 
@@ -120,7 +120,7 @@ Expected: Creates `.venv/`, installs all deps, no errors.
 
 - [ ] **Step 5: Smoke import test**
 
-Run: `uv run python -c "import ecgcode; print(ecgcode.__version__)"`
+Run: `uv run python -c "import openecg; print(ecgcode.__version__)"`
 Expected: `0.1.0`
 
 - [ ] **Step 6: Commit**
@@ -143,7 +143,7 @@ git commit -m "Add project scaffolding (pyproject + package init)"
 
 ```python
 # tests/test_vocab.py
-from ecgcode import vocab
+from openecg import vocab
 
 def test_id_count():
     assert len(vocab.ID_TO_CHAR) == 13
@@ -195,7 +195,7 @@ Expected: All 10 tests FAIL with `ModuleNotFoundError` or `AttributeError`.
 - [ ] **Step 3: Implement vocab.py**
 
 ```python
-# ecgcode/vocab.py
+# openecg/vocab.py
 """ECGCode alphabet v1.0 — 13 IDs, append-only versioning.
 
 See spec: docs/superpowers/specs/2026-05-03-ecgcode-stage1-design.md
@@ -283,7 +283,7 @@ git commit -m "Add vocab module with 13-symbol alphabet v1.0"
 ```python
 # tests/test_codec.py
 import numpy as np
-from ecgcode import codec, vocab
+from openecg import codec, vocab
 
 def test_encode_decode_roundtrip():
     events = [(vocab.ID_ISO, 100), (vocab.ID_P, 92), (vocab.ID_ISO, 200)]
@@ -329,11 +329,11 @@ Expected: All 6 tests FAIL with `ModuleNotFoundError`.
 - [ ] **Step 3: Implement encode/decode**
 
 ```python
-# ecgcode/codec.py
+# openecg/codec.py
 """ECGCode token format codec — uint16 pack/unpack, frame expansion, ASCII render."""
 
 import numpy as np
-from ecgcode import vocab
+from openecg import vocab
 
 MS_PER_UNIT = 4
 MAX_LENGTH_MS = 255 * MS_PER_UNIT  # 1020 ms
@@ -566,7 +566,7 @@ git commit -m "Add codec module (uint16 pack, frame expand, ASCII render)"
 # tests/test_pacer.py
 import numpy as np
 from scipy import signal as scipy_signal
-from ecgcode import pacer
+from openecg import pacer
 
 FS = 500
 
@@ -638,7 +638,7 @@ Expected: All 7 tests FAIL with `ModuleNotFoundError`.
 - [ ] **Step 3: Implement pacer.py**
 
 ```python
-# ecgcode/pacer.py
+# openecg/pacer.py
 """Pacemaker spike detector — highpass + adaptive threshold.
 
 Spike characteristics: 1-3ms wide, high amplitude (>1mV), sharp slope.
@@ -714,7 +714,7 @@ git commit -m "Add pacer spike detector (highpass + adaptive threshold)"
 - [ ] **Step 1: Implement delineate.py with DelineateResult**
 
 ```python
-# ecgcode/delineate.py
+# openecg/delineate.py
 """NeuroKit2 ecg_delineate wrapper.
 
 NK provides per-beat onset/peak/offset for P, QRS, T plus separate Q/S peaks.
@@ -789,7 +789,7 @@ No unit test for `run` (NK is hard to test in isolation; covered by integration 
 
 - [ ] **Step 2: Smoke verify import**
 
-Run: `uv run python -c "from ecgcode.delineate import DelineateResult, run; print(DelineateResult.empty().n_beats)"`
+Run: `uv run python -c "from openecg.delineate import DelineateResult, run; print(DelineateResult.empty().n_beats)"`
 Expected: `0`
 
 - [ ] **Step 3: Commit**
@@ -815,7 +815,7 @@ git commit -m "Add NK delineate wrapper with DelineateResult dataclass"
 import numpy as np
 import pytest
 
-from ecgcode.delineate import DelineateResult
+from openecg.delineate import DelineateResult
 
 
 def _arr(*xs):
@@ -889,7 +889,7 @@ def one_beat_narrow_no_qs_dr():
 import numpy as np
 import pytest
 
-from ecgcode import labeler, vocab
+from openecg import labeler, vocab
 
 FS = 500
 N_SAMPLES = 500  # 1 second @ 500Hz
@@ -984,7 +984,7 @@ Expected: All 9 tests FAIL with `ModuleNotFoundError`.
 - [ ] **Step 4: Implement labeler.py**
 
 ```python
-# ecgcode/labeler.py
+# openecg/labeler.py
 """Convert NK delineate output + pacer spikes → RLE token stream.
 
 Algorithm (per the spec §6):
@@ -997,8 +997,8 @@ Algorithm (per the spec §6):
 
 import numpy as np
 
-from ecgcode import vocab
-from ecgcode.delineate import DelineateResult
+from openecg import vocab
+from openecg.delineate import DelineateResult
 
 WIDE_QRS_THRESHOLD_MS = 120.0
 
@@ -1125,11 +1125,11 @@ git commit -m "Add labeler with QRS decomposition + wide-QRS fallback + spike pr
 - [ ] **Step 1: Implement extract + load_record**
 
 ```python
-# ecgcode/ludb.py
+# openecg/ludb.py
 """LUDB (Lobachevsky University Database) loader and stratified split.
 
-Expects ECGCODE_LUDB_ZIP env var pointing to the LUDB zip file.
-Extracts to ECGCODE_LUDB_CACHE (default: ~/.cache/ecgcode/ludb).
+Expects OPENECG_LUDB_ZIP env var pointing to the LUDB zip file.
+Extracts to OPENECG_LUDB_CACHE (default: ~/.cache/openecg/ludb).
 """
 
 import csv
@@ -1149,20 +1149,20 @@ LUDB_INNER_DIR = "lobachevsky-university-electrocardiography-database-1.0.1"
 
 
 def _zip_path() -> Path:
-    p = os.environ.get("ECGCODE_LUDB_ZIP")
+    p = os.environ.get("OPENECG_LUDB_ZIP")
     if not p:
         raise FileNotFoundError(
-            "Set ECGCODE_LUDB_ZIP env var to LUDB zip file path. "
+            "Set OPENECG_LUDB_ZIP env var to LUDB zip file path. "
             "Download from https://physionet.org/content/ludb/1.0.1/"
         )
     return Path(p)
 
 
 def _cache_path() -> Path:
-    p = os.environ.get("ECGCODE_LUDB_CACHE")
+    p = os.environ.get("OPENECG_LUDB_CACHE")
     if p:
         return Path(p).expanduser()
-    return Path.home() / ".cache" / "ecgcode" / "ludb"
+    return Path.home() / ".cache" / "openecg" / "ludb"
 
 
 def ensure_extracted() -> Path:
@@ -1261,8 +1261,8 @@ def load_metadata() -> list[dict]:
 
 Run:
 ```powershell
-$env:ECGCODE_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
-uv run python -c "from ecgcode.ludb import load_record, all_record_ids, load_metadata; ids=all_record_ids(); print(f'records: {len(ids)}'); rec = load_record(1); print(f'lead ii shape: {rec[\"ii\"].shape}'); meta=load_metadata(); print(f'pacers: {sum(1 for m in meta if m[\"pacemaker\"])}')"
+$env:OPENECG_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
+uv run python -c "from openecg.ludb import load_record, all_record_ids, load_metadata; ids=all_record_ids(); print(f'records: {len(ids)}'); rec = load_record(1); print(f'lead ii shape: {rec[\"ii\"].shape}'); meta=load_metadata(); print(f'pacers: {sum(1 for m in meta if m[\"pacemaker\"])}')"
 ```
 Expected: 
 ```
@@ -1338,7 +1338,7 @@ def load_split(path: Path | str = "data/splits/ludb_v1.json") -> dict[str, list[
 
 Run:
 ```bash
-uv run python -c "from ecgcode.ludb import save_split_json; s = save_split_json(); print(f'train: {len(s[\"train\"])}, val: {len(s[\"val\"])}')"
+uv run python -c "from openecg.ludb import save_split_json; s = save_split_json(); print(f'train: {len(s[\"train\"])}, val: {len(s[\"val\"])}')"
 ```
 Expected: `train: 160, val: 40` (or close — within ±2 due to rounding per rhythm class).
 
@@ -1354,7 +1354,7 @@ Expected: JSON with `train`, `val`, `seed`, `val_frac` keys.
 
 Run:
 ```bash
-uv run python -c "from ecgcode.ludb import stratified_split; s1 = stratified_split(seed=42); s2 = stratified_split(seed=42); assert s1 == s2; print('reproducible OK')"
+uv run python -c "from openecg.ludb import stratified_split; s1 = stratified_split(seed=42); s2 = stratified_split(seed=42); assert s1 == s2; print('reproducible OK')"
 ```
 Expected: `reproducible OK`
 
@@ -1364,7 +1364,7 @@ Run:
 ```bash
 uv run python -c "
 from collections import Counter
-from ecgcode.ludb import load_metadata, load_split
+from openecg.ludb import load_metadata, load_split
 meta = {m['id_int']: m['rhythm'] for m in load_metadata()}
 split = load_split()
 print('Train rhythms:', Counter(meta[i] for i in split['train']))
@@ -1393,7 +1393,7 @@ git commit -m "Add rhythm-stratified train/val split (160/40) + reproducibility 
 # tests/test_integration.py
 """End-to-end integration test on LUDB record 1.
 
-Skipped if ECGCODE_LUDB_ZIP env var not set or extraction fails.
+Skipped if OPENECG_LUDB_ZIP env var not set or extraction fails.
 """
 
 import os
@@ -1401,16 +1401,16 @@ import os
 import numpy as np
 import pytest
 
-LUDB_AVAILABLE = bool(os.environ.get("ECGCODE_LUDB_ZIP"))
+LUDB_AVAILABLE = bool(os.environ.get("OPENECG_LUDB_ZIP"))
 
 pytestmark = pytest.mark.skipif(
     not LUDB_AVAILABLE,
-    reason="ECGCODE_LUDB_ZIP env var not set; integration test requires LUDB",
+    reason="OPENECG_LUDB_ZIP env var not set; integration test requires LUDB",
 )
 
 
 def test_record_1_lead_ii_end_to_end():
-    from ecgcode import codec, delineate, labeler, ludb, pacer, vocab
+    from openecg import codec, delineate, labeler, ludb, pacer, vocab
     
     record = ludb.load_record(1)
     sig = record["ii"]
@@ -1437,7 +1437,7 @@ def test_record_1_lead_ii_end_to_end():
 
 
 def test_all_12_leads_record_1_no_crash():
-    from ecgcode import codec, delineate, labeler, ludb, pacer
+    from openecg import codec, delineate, labeler, ludb, pacer
     
     record = ludb.load_record(1)
     for lead, sig in record.items():
@@ -1453,7 +1453,7 @@ def test_all_12_leads_record_1_no_crash():
 def test_pacer_record_8_detects_spikes():
     """Record 8 is a pacemaker patient (per ludb.csv 'Cardiac pacing' column).
     Pacer detector should find at least one spike on lead V1 or II."""
-    from ecgcode import ludb, pacer
+    from openecg import ludb, pacer
     
     record = ludb.load_record(8)
     spike_counts = {lead: len(pacer.detect_spikes(sig, fs=500))
@@ -1466,7 +1466,7 @@ def test_pacer_record_8_detects_spikes():
 
 Run:
 ```powershell
-$env:ECGCODE_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
+$env:OPENECG_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
 uv run pytest tests/test_integration.py -v -s
 ```
 Expected: All 3 tests PASS. The `-s` flag shows the ASCII art print output for visual inspection.
@@ -1496,8 +1496,8 @@ git commit -m "Add LUDB record 1 end-to-end integration test"
 # tests/test_eval.py
 import numpy as np
 
-from ecgcode import eval as ee
-from ecgcode import vocab
+from openecg import eval as ee
+from openecg import vocab
 
 
 def test_supercategory_mapping():
@@ -1568,12 +1568,12 @@ Expected: All FAIL with `ModuleNotFoundError`.
 - [ ] **Step 3: Implement eval.py**
 
 ```python
-# ecgcode/eval.py
+# openecg/eval.py
 """Evaluation metrics — frame-level F1 (4-class) + boundary error (Martinez-style)."""
 
 import numpy as np
 
-from ecgcode import vocab
+from openecg import vocab
 
 # Supercategory IDs for LUDB-compat 4-class comparison
 SUPER_OTHER = 0
@@ -1697,7 +1697,7 @@ def _empty_boundary_result():
 def events_to_super_frames(events, n_samples, fs=500, frame_ms=20):
     """Pipeline events → per-frame supercategory array.
     Used by validate_v1.py and ablate_methods.py."""
-    from ecgcode import codec
+    from openecg import codec
     total_ms = round(n_samples * 1000.0 / fs)
     frames = codec.to_frames(events, frame_ms=frame_ms, total_ms=total_ms)
     return to_supercategory(frames)
@@ -1750,7 +1750,7 @@ git commit -m "Add eval module (4-class frame F1 + boundary error metrics)"
 """Run full pipeline on every LUDB record × lead → ludb_tokens.npz.
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/tokenize_ludb.py
 """
 
@@ -1760,7 +1760,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ecgcode import codec, delineate, labeler, ludb, pacer
+from openecg import codec, delineate, labeler, ludb, pacer
 
 OUT_PATH = Path("data/ludb_tokens.npz")
 
@@ -1815,7 +1815,7 @@ if __name__ == "__main__":
 
 Run:
 ```powershell
-$env:ECGCODE_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
+$env:OPENECG_LUDB_ZIP = "G:\Shared drives\datasets\ecg\lobachevsky-university-electrocardiography-database-1.0.1.zip"
 uv run python scripts/tokenize_ludb.py
 ```
 Expected: Progress output, saves `data/ludb_tokens.npz` (~150-300 KB), 2400 sequences.
@@ -1867,7 +1867,7 @@ annotations. Reports per-class frame F1 (4-class supercategory) and
 per-boundary-type error metrics (Martinez-style).
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/validate_v1.py
 """
 
@@ -1878,7 +1878,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ecgcode import codec, delineate, eval as ee, labeler, ludb, pacer, vocab
+from openecg import codec, delineate, eval as ee, labeler, ludb, pacer, vocab
 
 FS = 500
 FRAME_MS = 20
@@ -2078,7 +2078,7 @@ Tests NK's 4 delineate methods (`dwt`, `cwt`, `peak`, `prominence`) on the val s
 """Run validation pipeline with each NK delineate method, report comparison.
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/ablate_methods.py
 """
 
@@ -2088,7 +2088,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ecgcode import delineate, eval as ee, labeler, ludb, pacer, vocab
+from openecg import delineate, eval as ee, labeler, ludb, pacer, vocab
 
 METHODS = ["dwt", "cwt", "peak", "prominence"]
 FS = 500
@@ -2248,13 +2248,13 @@ git commit -m "Add NK method ablation script + lock in winner method"
 """Validate pacer spike detector: TPR on 10 pacemaker records, FPR on 190 non-pacer.
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/validate_pacer.py
 """
 
 from collections import defaultdict
 
-from ecgcode import ludb, pacer
+from openecg import ludb, pacer
 
 FS = 500
 
@@ -2371,7 +2371,7 @@ uv run python scripts/validate_pacer.py
 Run:
 ```bash
 uv run python -c "
-from ecgcode import codec, delineate, labeler, ludb, pacer
+from openecg import codec, delineate, labeler, ludb, pacer
 import random
 random.seed(42)
 val_ids = ludb.load_split()['val'][:10]
@@ -2409,7 +2409,7 @@ Stage 1 v1.0 complete: tokenization pipeline + LUDB validation baseline. See:
 
 ```bash
 uv sync
-$env:ECGCODE_LUDB_ZIP = "<path-to-ludb-zip>"
+$env:OPENECG_LUDB_ZIP = "<path-to-ludb-zip>"
 uv run pytest
 uv run python scripts/tokenize_ludb.py
 uv run python scripts/validate_v1.py

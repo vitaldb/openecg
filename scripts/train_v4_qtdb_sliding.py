@@ -25,16 +25,16 @@ import numpy as np
 import torch
 from torch.utils.data import ConcatDataset, DataLoader
 
-from ecgcode import eval as ee, isp, ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.infer import (
+from openecg import eval as ee, isp, ludb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.infer import (
     extract_boundaries, post_process_frames, predict_frames,
 )
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.multi_dataset import (
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.train import TrainConfig, fit, load_checkpoint
+from openecg.stage2.train import TrainConfig, fit, load_checkpoint
 
 CKPT_DIR = Path("data/checkpoints")
 OUT_DIR = Path("out")
@@ -118,7 +118,7 @@ def evaluate_dual(model, device, shift, kind):
                 except Exception:
                     continue
                 for lead_idx, lead in enumerate(isp.LEADS_12):
-                    from ecgcode.stage2.multi_dataset import _decimate_to_250, _normalize
+                    from openecg.stage2.multi_dataset import _decimate_to_250, _normalize
                     sig_1000 = record[lead]
                     sig_250 = _decimate_to_250(sig_1000, 1000)
                     sig_n = _normalize(sig_250)
@@ -154,7 +154,7 @@ def evaluate_dual(model, device, shift, kind):
 class _ConcatWithCounts(ConcatDataset):
     """ConcatDataset that aggregates label_counts from sub-datasets."""
     def label_counts(self):
-        from ecgcode.stage2.multi_dataset import N_CLASSES
+        from openecg.stage2.multi_dataset import N_CLASSES
         total = np.zeros(N_CLASSES, dtype=np.int64)
         for d in self.datasets:
             if hasattr(d, "label_counts"):

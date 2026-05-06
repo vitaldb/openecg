@@ -1,6 +1,6 @@
 import pytest
 
-from ecgcode.stage2.evaluate import (
+from openecg.stage2.evaluate import (
     average_boundary_f1,
     boundary_metrics_by_key,
     signed_boundary_metrics,

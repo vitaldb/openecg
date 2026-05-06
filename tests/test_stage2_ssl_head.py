@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from ecgcode.stage2.ssl.head import (
+from openecg.stage2.ssl.head import (
     BackboneWithHeads, FrameHead, FrameRegHead,
 )
 

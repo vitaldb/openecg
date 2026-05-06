@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from ecgcode import codec, vocab
+from openecg import codec, vocab
 
 
 def test_encode_decode_roundtrip():

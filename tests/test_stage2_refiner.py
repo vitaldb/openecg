@@ -1,6 +1,6 @@
 import numpy as np
 
-from ecgcode.stage2.refiner import refine_boundaries, refine_boundary
+from openecg.stage2.refiner import refine_boundaries, refine_boundary
 
 
 def test_refine_qrs_on_moves_to_derivative_onset():

@@ -16,14 +16,14 @@ import torch
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.infer import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.infer import (
     extract_boundaries, post_process_frames, predict_frames,
 )
-from ecgcode.stage2.model import FrameClassifierViT
-from ecgcode.stage2.multi_dataset import _decimate_to_250, _normalize
-from ecgcode.stage2.train import load_checkpoint
+from openecg.stage2.model import FrameClassifierViT
+from openecg.stage2.multi_dataset import _decimate_to_250, _normalize
+from openecg.stage2.train import load_checkpoint
 from scripts.viz_test_all_datasets import (
     ann_to_bands, ann_to_lines, baselines_for_signal, frames_to_bands,
     parse_wfdb_ann, plot_panel, CMAP, FRAME_MS, FS, WINDOW_SAMPLES,

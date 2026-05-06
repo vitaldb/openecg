@@ -3,7 +3,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from ecgcode.stage2.ssl.stmem import STMEMAdapter
+from openecg.stage2.ssl.stmem import STMEMAdapter
 
 
 def test_stmem_adapter_replicate_path():

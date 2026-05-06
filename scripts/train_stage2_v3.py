@@ -8,13 +8,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ecgcode.stage2.dataset import compute_class_weights
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.multi_dataset import (
+from openecg.stage2.dataset import compute_class_weights
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset,
     CombinedFrameDatasetAugmented,
 )
-from ecgcode.stage2.train import TrainConfig, fit
+from openecg.stage2.train import TrainConfig, fit
 
 CKPT_PATH = Path("data/checkpoints/stage2_v3.pt")
 

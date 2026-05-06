@@ -1,7 +1,7 @@
 # tests/test_labeler.py
 import numpy as np
 
-from ecgcode import labeler, vocab
+from openecg import labeler, vocab
 
 FS = 500
 N_SAMPLES = 500  # 1 second @ 500Hz

@@ -23,12 +23,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 
-from ecgcode import eval as ee
-from ecgcode import isp, ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.multi_dataset import CombinedFrameDataset
-from ecgcode.stage2.train import load_checkpoint
+from openecg import eval as ee
+from openecg import isp, ludb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.multi_dataset import CombinedFrameDataset
+from openecg.stage2.train import load_checkpoint
 
 OUT_DIR = Path("out") / "diag_isp"
 F_CKPT = Path("data/checkpoints/stage2_v4_ludb_only.pt")

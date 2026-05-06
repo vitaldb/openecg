@@ -1,4 +1,4 @@
-# ecgcode/pacer.py
+# openecg/pacer.py
 """Pacemaker spike detector - highpass + adaptive threshold.
 
 Spike characteristics: 1-3ms wide, high amplitude (>1mV), sharp slope.

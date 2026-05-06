@@ -4,16 +4,16 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import (
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import (
     TrainConfig,
     train_one_epoch,
     save_checkpoint,
     load_checkpoint,
     score_val_metrics,
 )
-from ecgcode import eval as ee
-from ecgcode.stage2.infer import load_model_bundle
+from openecg import eval as ee
+from openecg.stage2.infer import load_model_bundle
 
 
 def _tiny_loader(n_samples=4):

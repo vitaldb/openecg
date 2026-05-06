@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from ecgcode import eval as ee
-from ecgcode import vocab
+from openecg import eval as ee
+from openecg import vocab
 
 
 def test_supercategory_mapping():

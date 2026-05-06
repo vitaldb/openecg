@@ -16,9 +16,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from ecgcode import eval as ee, ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.infer import load_model, predict_frames
+from openecg import eval as ee, ludb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.infer import load_model, predict_frames
 
 V1_CKPT = "data/checkpoints/stage2_v1.pt"
 V3_CKPT = "data/checkpoints/stage2_v3.pt"

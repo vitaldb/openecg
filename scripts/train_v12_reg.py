@@ -17,19 +17,19 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
-from ecgcode.stage2.infer import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
+from openecg.stage2.infer import (
     apply_reg_to_boundaries, extract_boundaries,
     post_process_frames, predict_frames_with_reg,
 )
-from ecgcode.stage2.model import FrameClassifierViTReg
-from ecgcode.stage2.multi_dataset import (
+from openecg.stage2.model import FrameClassifierViTReg
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset, _decimate_to_250, _normalize,
 )
-from ecgcode.stage2.reg_targets import RegLabelDataset
-from ecgcode.stage2.train import TrainConfig, fit_reg, load_checkpoint
+from openecg.stage2.reg_targets import RegLabelDataset
+from openecg.stage2.train import TrainConfig, fit_reg, load_checkpoint
 from scripts.train_v9_q1c_pu_merge import KWARGS, _ConcatWithCounts
 
 CKPT_DIR = REPO / "data" / "checkpoints"

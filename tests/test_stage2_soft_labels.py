@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 import torch
 
-from ecgcode import eval as ee
-from ecgcode.stage2.soft_labels import SoftLabelDataset, soft_boundary_labels
+from openecg import eval as ee
+from openecg.stage2.soft_labels import SoftLabelDataset, soft_boundary_labels
 
 
 def test_no_transitions_produces_one_hot():

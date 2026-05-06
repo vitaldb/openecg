@@ -1,4 +1,4 @@
-from ecgcode import vocab
+from openecg import vocab
 
 
 def test_id_count():

@@ -1,4 +1,4 @@
-"""ECGCode alphabet v1.0 — 13 IDs, append-only versioning.
+"""OpenECG alphabet v1.0 — 13 IDs, append-only versioning.
 
 See spec: docs/superpowers/specs/2026-05-03-ecgcode-stage1-design.md
 """

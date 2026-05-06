@@ -25,19 +25,19 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode import eval as ecg_eval
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.multi_dataset import (
+from openecg import isp, ludb, qtdb
+from openecg import eval as ecg_eval
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.reg_targets import RegLabelDataset
-from ecgcode.stage2.soft_labels import SoftLabelDataset
-from ecgcode.stage2.ssl.head import BackboneWithHeads
-from ecgcode.stage2.ssl.hubert import HUBERT_DEFAULT_MODEL_ID, HubertECGAdapter
-from ecgcode.stage2.ssl.stmem import STMEMAdapter
-from ecgcode.stage2.soft_labels import soft_boundary_labels
-from ecgcode.stage2.train import (
+from openecg.stage2.reg_targets import RegLabelDataset
+from openecg.stage2.soft_labels import SoftLabelDataset
+from openecg.stage2.ssl.head import BackboneWithHeads
+from openecg.stage2.ssl.hubert import HUBERT_DEFAULT_MODEL_ID, HubertECGAdapter
+from openecg.stage2.ssl.stmem import STMEMAdapter
+from openecg.stage2.soft_labels import soft_boundary_labels
+from openecg.stage2.train import (
     TrainConfig, boundary_l1_loss, kl_cross_entropy, load_checkpoint,
     run_eval, run_eval_reg, save_checkpoint, score_val_metrics,
 )

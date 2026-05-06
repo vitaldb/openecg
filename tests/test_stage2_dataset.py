@@ -3,12 +3,12 @@ import numpy as np
 import pytest
 import torch
 
-LUDB_AVAILABLE = bool(os.environ.get("ECGCODE_LUDB_ZIP"))
-pytestmark = pytest.mark.skipif(not LUDB_AVAILABLE, reason="ECGCODE_LUDB_ZIP not set")
+LUDB_AVAILABLE = bool(os.environ.get("OPENECG_LUDB_ZIP"))
+pytestmark = pytest.mark.skipif(not LUDB_AVAILABLE, reason="OPENECG_LUDB_ZIP not set")
 
 
 def test_dataset_basic_shapes():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1, 2])
     assert len(ds) > 0
     sig, lead_id, labels = ds[0]
@@ -22,7 +22,7 @@ def test_dataset_basic_shapes():
 
 
 def test_dataset_labels_in_supercategory_range():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1, 2])
     sig, lead_id, labels = ds[0]
     assert int(labels.min()) >= 0
@@ -30,7 +30,7 @@ def test_dataset_labels_in_supercategory_range():
 
 
 def test_dataset_signal_normalized():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1, 2])
     sig, _, _ = ds[0]
     assert abs(float(sig.mean())) < 0.1
@@ -38,7 +38,7 @@ def test_dataset_signal_normalized():
 
 
 def test_dataset_covers_all_leads():
-    from ecgcode.stage2.dataset import LUDBFrameDataset
+    from openecg.stage2.dataset import LUDBFrameDataset
     ds = LUDBFrameDataset(record_ids=[1])
     leads_seen = set()
     for i in range(len(ds)):
@@ -48,7 +48,7 @@ def test_dataset_covers_all_leads():
 
 
 def test_compute_class_weights_inverse_sqrt():
-    from ecgcode.stage2.dataset import compute_class_weights
+    from openecg.stage2.dataset import compute_class_weights
     counts = np.array([600, 100, 100, 200], dtype=np.float64)
     weights = compute_class_weights(counts)
     assert weights[1] > weights[0]

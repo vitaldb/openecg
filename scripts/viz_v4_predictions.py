@@ -20,13 +20,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.infer import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.infer import (
     extract_boundaries, load_model_bundle,
     post_process_frames, predict_frames,
 )
-from ecgcode.stage2.multi_dataset import _decimate_to_250, _normalize
+from openecg.stage2.multi_dataset import _decimate_to_250, _normalize
 
 CKPT = Path("data/checkpoints/stage2_v4_C.pt")
 OUT_DIR = Path("out/viz_v4")
@@ -214,7 +214,7 @@ def viz_qtdb(model, device, n_records=4):
             if len(sig) < WINDOW_SAMPLES:
                 continue
             sig_n = _normalize(sig)
-            from ecgcode.stage2.multi_dataset import QTDB_LEAD_TO_LUDB_ID
+            from openecg.stage2.multi_dataset import QTDB_LEAD_TO_LUDB_ID
             lead_idx = QTDB_LEAD_TO_LUDB_ID.get(lead_name, 1)
             pp, bds = predict_full(model, sig_n, lead_idx, device)
             ann_local = {k: [int(s - start) for s in v

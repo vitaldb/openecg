@@ -1,7 +1,7 @@
 """Smoke test for v3 CombinedFrameDataset."""
 import time
 
-from ecgcode.stage2.multi_dataset import CombinedFrameDataset
+from openecg.stage2.multi_dataset import CombinedFrameDataset
 
 t0 = time.time()
 ds_train = CombinedFrameDataset(["ludb_train", "qtdb", "isp_train"])

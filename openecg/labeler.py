@@ -1,4 +1,4 @@
-# ecgcode/labeler.py
+# openecg/labeler.py
 """Convert NK delineate output + pacer spikes -> RLE token stream.
 
 Algorithm (per the spec section 6):
@@ -11,8 +11,8 @@ Algorithm (per the spec section 6):
 
 import numpy as np
 
-from ecgcode import vocab
-from ecgcode.delineate import DelineateResult
+from openecg import vocab
+from openecg.delineate import DelineateResult
 
 WIDE_QRS_THRESHOLD_MS = 120.0
 
@@ -127,7 +127,7 @@ def _rle_compress(labels: np.ndarray, ms_per_sample: float) -> list:
     rounding error never drifts more than 4ms from the true total. Single-sample
     pacer spikes are always emitted as 4ms (the minimum codec quantum).
     """
-    from ecgcode.codec import MS_PER_UNIT
+    from openecg.codec import MS_PER_UNIT
 
     if len(labels) == 0:
         return []

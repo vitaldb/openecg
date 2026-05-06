@@ -6,7 +6,7 @@ annotations. Reports per-class frame F1 (4-class supercategory) and
 per-boundary-type error metrics (Martinez-style).
 
 Usage:
-    $env:ECGCODE_LUDB_ZIP = "..."
+    $env:OPENECG_LUDB_ZIP = "..."
     uv run python scripts/validate_v1.py
 """
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ecgcode import codec, delineate, eval as ee, labeler, ludb, pacer, vocab
+from openecg import codec, delineate, eval as ee, labeler, ludb, pacer, vocab
 
 FS = 500
 FRAME_MS = 20
@@ -121,7 +121,7 @@ def main():
 
     q_loss = 1 - (rle_q_count / nk_q_count) if nk_q_count > 0 else 0.0
 
-    print("\n== ECGCode v1.0 Validation on LUDB val ==\n")
+    print("\n== OpenECG v1.0 Validation on LUDB val ==\n")
     print("Frame-level F1 (4-class supercategory):")
     for sc, m in f1_metrics.items():
         name = ee.SUPER_NAMES[sc]

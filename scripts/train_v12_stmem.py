@@ -12,14 +12,14 @@ from torch.utils.data import DataLoader
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "third_party" / "WTdelineator"))
 
-from ecgcode import isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.multi_dataset import (
+from openecg import isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, QTDBSlidingDataset,
 )
-from ecgcode.stage2.ssl.head import BackboneWithHeads
-from ecgcode.stage2.ssl.stmem import STMEMAdapter
-from ecgcode.stage2.train import TrainConfig, load_checkpoint
+from openecg.stage2.ssl.head import BackboneWithHeads
+from openecg.stage2.ssl.stmem import STMEMAdapter
+from openecg.stage2.train import TrainConfig, load_checkpoint
 from scripts.train_v12_hubert import _fit_with_groups
 from scripts.train_v9_q1c_pu_merge import _ConcatWithCounts, eval_all
 

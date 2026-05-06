@@ -1,8 +1,8 @@
-# ecgcode/ludb.py
+# openecg/ludb.py
 """LUDB (Lobachevsky University Database) loader and stratified split.
 
-Expects ECGCODE_LUDB_ZIP env var pointing to the LUDB zip file.
-Extracts to ECGCODE_LUDB_CACHE (default: ~/.cache/ecgcode/ludb).
+Expects OPENECG_LUDB_ZIP env var pointing to the LUDB zip file.
+Extracts to OPENECG_LUDB_CACHE (default: ~/.cache/openecg/ludb).
 """
 
 import csv
@@ -22,20 +22,20 @@ LUDB_INNER_DIR = "lobachevsky-university-electrocardiography-database-1.0.1"
 
 
 def _zip_path() -> Path:
-    p = os.environ.get("ECGCODE_LUDB_ZIP")
+    p = os.environ.get("OPENECG_LUDB_ZIP")
     if not p:
         raise FileNotFoundError(
-            "Set ECGCODE_LUDB_ZIP env var to LUDB zip file path. "
+            "Set OPENECG_LUDB_ZIP env var to LUDB zip file path. "
             "Download from https://physionet.org/content/ludb/1.0.1/"
         )
     return Path(p)
 
 
 def _cache_path() -> Path:
-    p = os.environ.get("ECGCODE_LUDB_CACHE")
+    p = os.environ.get("OPENECG_LUDB_CACHE")
     if p:
         return Path(p).expanduser()
-    return Path.home() / ".cache" / "ecgcode" / "ludb"
+    return Path.home() / ".cache" / "openecg" / "ludb"
 
 
 def ensure_extracted() -> Path:

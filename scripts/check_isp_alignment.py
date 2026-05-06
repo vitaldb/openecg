@@ -6,8 +6,8 @@ causing accumulating time drift between signal time-axis and frame labels.
 """
 
 import numpy as np
-from ecgcode import eval as ee
-from ecgcode import isp
+from openecg import eval as ee
+from openecg import isp
 
 
 def main():

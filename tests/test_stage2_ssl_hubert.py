@@ -2,17 +2,17 @@ import os
 import pytest
 import torch
 
-from ecgcode.stage2.ssl.hubert import HubertECGAdapter, HUBERT_DEFAULT_MODEL_ID
+from openecg.stage2.ssl.hubert import HubertECGAdapter, HUBERT_DEFAULT_MODEL_ID
 
 
-HF_OK = os.environ.get("ECGCODE_RUN_HF_TESTS") == "1"
+HF_OK = os.environ.get("OPENECG_RUN_HF_TESTS") == "1"
 
 
 @pytest.mark.skipif(not HF_OK,
-                     reason="set ECGCODE_RUN_HF_TESTS=1 to download HuBERT-ECG weights")
+                     reason="set OPENECG_RUN_HF_TESTS=1 to download HuBERT-ECG weights")
 def test_hubert_adapter_forward_shape():
     """End-to-end shape check; downloads weights from HF.
-    Run with: ECGCODE_RUN_HF_TESTS=1 pytest tests/test_stage2_ssl_hubert.py
+    Run with: OPENECG_RUN_HF_TESTS=1 pytest tests/test_stage2_ssl_hubert.py
     """
     adapter = HubertECGAdapter(model_id=HUBERT_DEFAULT_MODEL_ID, device="cpu")
     sig = torch.randn(2, 2500)

@@ -27,16 +27,16 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ecgcode import eval as ee, isp, ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset, compute_class_weights
-from ecgcode.stage2.infer import (
+from openecg import eval as ee, isp, ludb
+from openecg.stage2.dataset import LUDBFrameDataset, compute_class_weights
+from openecg.stage2.infer import (
     extract_boundaries, post_process_frames, predict_frames,
 )
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.multi_dataset import (
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.multi_dataset import (
     CombinedFrameDataset, CombinedFrameDatasetTimeAugmented,
 )
-from ecgcode.stage2.train import TrainConfig, fit, load_checkpoint
+from openecg.stage2.train import TrainConfig, fit, load_checkpoint
 
 CKPT_DIR = Path("data/checkpoints")
 OUT_DIR = Path("out")
@@ -114,7 +114,7 @@ def evaluate_isp(model, device, shift):
             except Exception:
                 continue
             for lead_idx, lead in enumerate(isp.LEADS_12):
-                from ecgcode.stage2.multi_dataset import _decimate_to_250, _normalize
+                from openecg.stage2.multi_dataset import _decimate_to_250, _normalize
                 sig_1000 = record[lead]
                 sig_250 = _decimate_to_250(sig_1000, 1000)
                 sig_n = _normalize(sig_250)
@@ -168,7 +168,7 @@ def main():
     # Construct each augmented dataset
     # scale_range=(1.0, 1.2): stretch only (+20% max), preserves QRS morphology
     # within normal range and avoids compression padding artifacts. See
-    # ecgcode/stage2/augment.py time_stretch_aligned docstring.
+    # openecg/stage2/augment.py time_stretch_aligned docstring.
     ds_specs = [
         ("C_taug_shift",    {"max_shift_ms": 200, "scale_range": (1.0, 1.0),  "p_shift": 1.0, "p_stretch": 0.0, "n_ops_signal": 0}),
         ("C_taug_stretch",  {"max_shift_ms": 0,   "scale_range": (1.0, 1.2),  "p_shift": 0.0, "p_stretch": 1.0, "n_ops_signal": 0}),

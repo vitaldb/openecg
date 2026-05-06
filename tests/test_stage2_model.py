@@ -1,6 +1,6 @@
 import torch
 
-from ecgcode.stage2.model import FrameClassifier
+from openecg.stage2.model import FrameClassifier
 
 
 def test_forward_shape_cpu():
@@ -51,7 +51,7 @@ def test_softmax_sums_to_1():
 
 
 def test_vit_reg_forward_shape_cpu():
-    from ecgcode.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.model import FrameClassifierViTReg
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
         use_lead_emb=False, pos_type="learnable",
@@ -66,7 +66,7 @@ def test_vit_reg_forward_shape_cpu():
 
 
 def test_vit_reg_model_config_records_n_reg():
-    from ecgcode.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.model import FrameClassifierViTReg
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
         use_lead_emb=False, pos_type="learnable",

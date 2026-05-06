@@ -1,11 +1,11 @@
-"""ECGCode token format codec — uint16 pack/unpack, frame expansion, ASCII render.
+"""OpenECG token format codec — uint16 pack/unpack, frame expansion, ASCII render.
 
 Spec: docs/superpowers/specs/2026-05-03-ecgcode-stage1-design.md §5
 """
 
 import numpy as np
 
-from ecgcode import vocab
+from openecg import vocab
 
 MS_PER_UNIT = 4
 MAX_LENGTH_MS = 255 * MS_PER_UNIT  # 1020 ms

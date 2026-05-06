@@ -1,4 +1,4 @@
-# ecgcode/delineate.py
+# openecg/delineate.py
 """NeuroKit2 ecg_delineate wrapper.
 
 NK provides per-beat onset/peak/offset for P, QRS, T plus separate Q/S peaks.

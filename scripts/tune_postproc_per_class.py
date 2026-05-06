@@ -11,11 +11,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ecgcode import eval as ee, ludb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.infer import post_process_frames, predict_frames
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import load_checkpoint
+from openecg import eval as ee, ludb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.infer import post_process_frames, predict_frames
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import load_checkpoint
 
 CKPT_DIR = Path("data/checkpoints")
 OUT_DIR = Path("out")

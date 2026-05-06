@@ -1,4 +1,4 @@
-# ecgcode/stage2/augment.py
+# openecg/stage2/augment.py
 """ECG-specific augmentations per SemiSegECG (arXiv 2507.18323).
 
 Apply during training only. Skip horizontal flip and baseline shift (paper warns against).

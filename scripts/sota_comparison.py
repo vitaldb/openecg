@@ -26,12 +26,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ecgcode import eval as ee, isp, ludb, qtdb
-from ecgcode.stage2.dataset import LUDBFrameDataset
-from ecgcode.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
-from ecgcode.stage2.infer import extract_boundaries, post_process_frames, predict_frames
-from ecgcode.stage2.model import FrameClassifier
-from ecgcode.stage2.train import load_checkpoint
+from openecg import eval as ee, isp, ludb, qtdb
+from openecg.stage2.dataset import LUDBFrameDataset
+from openecg.stage2.evaluate import MARTINEZ_TOLERANCE_MS, signed_boundary_metrics
+from openecg.stage2.infer import extract_boundaries, post_process_frames, predict_frames
+from openecg.stage2.model import FrameClassifier
+from openecg.stage2.train import load_checkpoint
 
 CKPT_DIR = Path("data/checkpoints")
 OUT_DIR = Path("out")

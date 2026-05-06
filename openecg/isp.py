@@ -1,4 +1,4 @@
-# ecgcode/isp.py
+# openecg/isp.py
 """ISP ECG delineation dataset loader.
 
 Source: https://zenodo.org/records/14679837 (475 records, 12-lead, ~10s @ 1000Hz,
@@ -25,17 +25,17 @@ _TUPLE_RE = re.compile(r"\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)")
 
 
 def _zip_path() -> Path:
-    p = os.environ.get("ECGCODE_ISP_ZIP")
+    p = os.environ.get("OPENECG_ISP_ZIP")
     if not p:
-        raise FileNotFoundError("Set ECGCODE_ISP_ZIP env var")
+        raise FileNotFoundError("Set OPENECG_ISP_ZIP env var")
     return Path(p)
 
 
 def _cache_path() -> Path:
-    p = os.environ.get("ECGCODE_ISP_CACHE")
+    p = os.environ.get("OPENECG_ISP_CACHE")
     if p:
         return Path(p).expanduser()
-    return Path.home() / ".cache" / "ecgcode" / "isp"
+    return Path.home() / ".cache" / "openecg" / "isp"
 
 
 def ensure_extracted() -> Path:

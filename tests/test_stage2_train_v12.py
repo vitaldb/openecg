@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 
-from ecgcode.stage2.model import FrameClassifierViT
-from ecgcode.stage2.train import (
+from openecg.stage2.model import FrameClassifierViT
+from openecg.stage2.train import (
     kl_cross_entropy, train_one_epoch_kl,
 )
 
@@ -49,7 +49,7 @@ def test_train_one_epoch_kl_loss_decreases():
 
 
 def test_boundary_l1_loss_masked():
-    from ecgcode.stage2.train import boundary_l1_loss
+    from openecg.stage2.train import boundary_l1_loss
     pred = torch.tensor([[[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]]])
     target = torch.tensor([[[3.0, 0.0, 0.0, 0.0, 0.0, 0.0]]])
     mask = torch.tensor([[[True, False, False, False, False, False]]])
@@ -58,8 +58,8 @@ def test_boundary_l1_loss_masked():
 
 
 def test_train_one_epoch_reg_loss_decreases():
-    from ecgcode.stage2.model import FrameClassifierViTReg
-    from ecgcode.stage2.train import train_one_epoch_reg
+    from openecg.stage2.model import FrameClassifierViTReg
+    from openecg.stage2.train import train_one_epoch_reg
     torch.manual_seed(0)
     model = FrameClassifierViTReg(
         patch_size=5, d_model=32, n_heads=2, n_layers=2, ff=64,
