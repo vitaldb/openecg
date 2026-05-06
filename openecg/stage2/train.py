@@ -350,19 +350,121 @@ def train_one_epoch_reg(model, loader, optimizer, class_weights, device,
 
 @torch.no_grad()
 def run_eval_reg(model, loader, device):
-    """Same as run_eval but unwraps the (cls, reg) tuple model output."""
+    """Same as run_eval but unwraps the (cls, reg, [aux]) tuple model output.
+
+    Accepts both the 2-tuple (cls, reg) returned by FrameClassifierViTReg and
+    the 3-tuple (cls, reg, aux) returned by FrameClassifierViTRegAux.
+    """
     model.train(False)
     all_pred = []
     all_true = []
     for sigs, leads, labels in loader:
         sigs = sigs.to(device)
         leads = leads.to(device)
-        cls_logits, _ = model(sigs, leads)
+        out = model(sigs, leads)
+        cls_logits = out[0]
         pred = cls_logits.argmax(dim=-1).cpu().numpy().astype(np.uint8)
         true = labels.numpy().astype(np.uint8)
         all_pred.append(pred.reshape(-1))
         all_true.append(true.reshape(-1))
     return ecg_eval.frame_f1(np.concatenate(all_pred), np.concatenate(all_true))
+
+
+def train_one_epoch_reg_aux(model, loader, optimizer, class_weights, device,
+                              scheduler=None, grad_clip=1.0,
+                              ignore_index=255, lambda_reg=0.1, alpha_aux=0.3):
+    """Per-epoch training loop for an auxiliary-head model returning
+    (cls_logits, reg_offsets, aux_logits).
+
+    Loss = main_cls_loss + alpha_aux * aux_cls_loss + lambda_reg * reg_loss.
+    """
+    model.train()
+    weights = class_weights.to(device)
+    total = 0.0
+    n = 0
+    for sigs, leads, labels, reg_t, reg_m in loader:
+        sigs = sigs.to(device)
+        leads = leads.to(device)
+        labels = labels.to(device)
+        reg_t = reg_t.to(device).float()
+        reg_m = reg_m.to(device).bool()
+        cls_logits, reg_off, aux_logits = model(sigs, leads)
+        cls_loss = nn.functional.cross_entropy(
+            cls_logits.transpose(1, 2), labels, weight=weights,
+            ignore_index=ignore_index,
+        )
+        aux_loss = nn.functional.cross_entropy(
+            aux_logits.transpose(1, 2), labels, weight=weights,
+            ignore_index=ignore_index,
+        )
+        reg_loss = boundary_l1_loss(reg_off, reg_t, reg_m)
+        loss = cls_loss + alpha_aux * aux_loss + lambda_reg * reg_loss
+        optimizer.zero_grad()
+        loss.backward()
+        if grad_clip and grad_clip > 0:
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        total += float(loss.item())
+        n += 1
+    return total / max(1, n)
+
+
+def fit_reg_aux(model, train_loader, val_loader, class_weights, config,
+                device="cuda", ckpt_path=None, log_fn=print,
+                lambda_reg=0.1, alpha_aux=0.3):
+    """fit() variant for FrameClassifierViTRegAux: adds an auxiliary CE loss
+    on the intermediate-layer aux head with weight `alpha_aux`."""
+    model = model.to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=config.lr, weight_decay=config.weight_decay,
+    )
+    total_steps = config.epochs * max(1, len(train_loader))
+    warmup_steps = int(total_steps * config.warmup_frac)
+
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + np.cos(np.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    best_score = -1.0
+    best_metrics = None
+    bad = 0
+    for epoch in range(config.epochs):
+        train_loss = train_one_epoch_reg_aux(
+            model, train_loader, optimizer, class_weights, device,
+            scheduler=scheduler, grad_clip=config.grad_clip,
+            lambda_reg=lambda_reg, alpha_aux=alpha_aux,
+        )
+        val_metrics = run_eval_reg(model, val_loader, device)
+        score = score_val_metrics(val_metrics, config.early_stop_metric)
+        log_fn(
+            f"epoch {epoch:3d}  train_loss={train_loss:.4f}  "
+            f"score={score:.3f}  lambda={lambda_reg}  alpha_aux={alpha_aux}"
+        )
+        if score > best_score:
+            best_score = score
+            best_metrics = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "score": score,
+                "metrics": val_metrics,
+                "early_stop_metric": config.early_stop_metric,
+            }
+            bad = 0
+            if ckpt_path is not None:
+                save_checkpoint(ckpt_path, model, best_metrics, config,
+                                extra={"alpha_aux": alpha_aux,
+                                       "lambda_reg": lambda_reg})
+        else:
+            bad += 1
+            if bad >= config.early_stop_patience:
+                log_fn(f"Early stop at epoch {epoch}")
+                break
+    return best_metrics
 
 
 def fit_reg(model, train_loader, val_loader, class_weights, config,

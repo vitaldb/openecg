@@ -302,6 +302,77 @@ def _pink_noise(n: int, rng: np.random.Generator, sigma: float = 0.02) -> np.nda
     return out
 
 
+def _baseline_wander(n: int, fs: int, rng: np.random.Generator,
+                      sigma_range: tuple[float, float] = (0.05, 0.20)) -> np.ndarray:
+    """Sum of 2-4 low-frequency sinusoids (0.1-0.5 Hz) emulating respiration
+    and motion baseline drift."""
+    sigma = float(rng.uniform(*sigma_range))
+    n_components = int(rng.integers(2, 5))
+    t = np.arange(n, dtype=np.float32) / fs
+    out = np.zeros(n, dtype=np.float32)
+    for _ in range(n_components):
+        f = float(rng.uniform(0.05, 0.6))
+        phi = float(rng.uniform(0.0, 2 * np.pi))
+        out += sigma * np.sin(2 * np.pi * f * t + phi).astype(np.float32)
+    return out
+
+
+def _powerline_hum(n: int, fs: int, rng: np.random.Generator,
+                    sigma_range: tuple[float, float] = (0.005, 0.04)) -> np.ndarray:
+    """50 or 60 Hz powerline interference."""
+    sigma = float(rng.uniform(*sigma_range))
+    f = float(rng.choice([50.0, 60.0]))
+    phi = float(rng.uniform(0.0, 2 * np.pi))
+    t = np.arange(n, dtype=np.float32) / fs
+    return (sigma * np.sin(2 * np.pi * f * t + phi)).astype(np.float32)
+
+
+def _motion_artifact(n: int, fs: int, rng: np.random.Generator,
+                      sigma_range: tuple[float, float] = (0.3, 1.5)) -> np.ndarray:
+    """Sparse triangular spikes simulating electrode motion. ~1-3 spikes."""
+    out = np.zeros(n, dtype=np.float32)
+    n_spikes = int(rng.integers(1, 4))
+    for _ in range(n_spikes):
+        center = int(rng.integers(0, n))
+        width = int(rng.integers(int(0.04 * fs), int(0.30 * fs) + 1))
+        amp = float(rng.uniform(*sigma_range)) * (1.0 if rng.random() < 0.5 else -1.0)
+        half = max(1, width // 2)
+        lo = max(0, center - half)
+        hi = min(n, center + half)
+        for i in range(lo, hi):
+            d = abs(i - center)
+            out[i] += amp * (1.0 - d / half)
+    return out
+
+
+def _place_template(out: np.ndarray, t_center: int, template: np.ndarray,
+                    peak_offset: int, amp: float, shift: int):
+    """Add `amp * template` to `out` aligned at `t_center + shift`."""
+    _add_template(out, t_center + shift, (template * amp).astype(np.float32),
+                  peak_offset)
+
+
+def _stretch_qrst(tmpl: _QRSTTemplate, scale: float) -> _QRSTTemplate:
+    """Time-stretch a QRS-T template by `scale` (>1.0 widens QRS).
+
+    Used to synthesize the wide-QRS ventricular escape rhythm seen in
+    complete AVB. A scale of 1.5 turns a 90 ms QRS into a 135 ms QRS,
+    which is the clinically diagnostic wide-QRS pattern.
+    """
+    if abs(scale - 1.0) < 1e-3:
+        return tmpl
+    new_L = max(8, int(round(len(tmpl.waveform) * scale)))
+    new_wave = scipy_signal.resample(tmpl.waveform, new_L).astype(np.float32)
+    return _QRSTTemplate(
+        waveform=new_wave,
+        qrs_on_offset=int(round(tmpl.qrs_on_offset * scale)),
+        qrs_peak_offset=int(round(tmpl.qrs_peak_offset * scale)),
+        qrs_off_offset=int(round(tmpl.qrs_off_offset * scale)),
+        t_on_offset=int(round(tmpl.t_on_offset * scale)),
+        t_off_offset=int(round(tmpl.t_off_offset * scale)),
+    )
+
+
 def generate_avb_window(
     bank: TemplateBank,
     lead: str,
@@ -310,11 +381,38 @@ def generate_avb_window(
     fs: int = 250,
     duration_s: float = 10.0,
     atrial_bpm_range: tuple[float, float] = (60.0, 100.0),
-    escape_bpm_range: tuple[float, float] = (30.0, 50.0),
-    atrial_jitter: float = 0.04,
-    vent_jitter: float = 0.05,
+    junctional_bpm_range: tuple[float, float] = (40.0, 60.0),
+    ventricular_bpm_range: tuple[float, float] = (25.0, 45.0),
+    atrial_jitter: float = 0.03,
+    vent_jitter: float = 0.03,
+    # Per-beat morphology jitter — small enough to preserve the regular,
+    # consistent-morphology look that distinguishes AVB clinically from afib.
+    beat_amp_range: tuple[float, float] = (0.85, 1.15),
+    beat_shift_max: int = 1,            # samples (= 4 ms @ 250 Hz)
+    # Probability that complete AVB uses a wide-QRS ventricular escape
+    # (template time-stretched 1.3-1.7x). Otherwise junctional escape (narrow).
+    ventricular_escape_prob: float = 0.5,
+    qrs_stretch_range: tuple[float, float] = (1.3, 1.7),
+    # Background noise / artifacts (acquisition-side, not beat-related).
+    baseline_wander_prob: float = 0.85,
+    powerline_hum_prob: float = 0.30,
+    motion_artifact_prob: float = 0.20,
 ) -> tuple[np.ndarray, dict[str, list[int]]]:
     """Synthesize one (signal, label) example for a chosen AV-block scenario.
+
+    Clinically the diagnostic feature of complete AVB is **two regular but
+    independent rhythms** — the same atrial focus fires P-waves at a constant
+    rate and the same ventricular escape focus fires QRS at a (different,
+    slower) constant rate. Beat-to-beat morphology should be CONSISTENT
+    within one window for both P and QRS; varying it makes the synthesis
+    look like atrial fibrillation instead of AVB.
+
+    To match this, one P template and one QRS-T template are drawn at the
+    start of the window and reused for every beat. For complete AVB we
+    optionally time-stretch the QRS-T (the "ventricular escape" wide-QRS
+    pattern); junctional escape uses the narrow template as-is. Per-beat
+    amplitude/position jitter is kept small so the rhythm still looks
+    regular.
 
     Returns
         signal : float32 np.ndarray, length = fs * duration_s, mean ~0, std ~1
@@ -324,69 +422,83 @@ def generate_avb_window(
         raise ValueError(f"TemplateBank has no templates for lead {lead}")
     n_samples = int(duration_s * fs)
     sig = _pink_noise(n_samples, rng, sigma=0.02)
+    if rng.random() < baseline_wander_prob:
+        sig += _baseline_wander(n_samples, fs, rng)
+    if rng.random() < powerline_hum_prob:
+        sig += _powerline_hum(n_samples, fs, rng)
+    if rng.random() < motion_artifact_prob:
+        sig += _motion_artifact(n_samples, fs, rng)
+
+    # Single P / QRS-T template per window (consistent morphology across beats).
+    p_template = bank.p[lead][int(rng.integers(0, len(bank.p[lead])))]
+    qrst_template = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
+
+    # Pick escape mechanism for complete AVB (junctional vs ventricular).
+    is_ventricular_escape = (
+        scenario == "complete" and rng.random() < ventricular_escape_prob
+    )
+    if is_ventricular_escape:
+        scale = float(rng.uniform(*qrs_stretch_range))
+        qrst_template = _stretch_qrst(qrst_template, scale)
+
     labels: dict[str, list[int]] = {k: [] for k in
         ("p_on", "p_off", "qrs_on", "qrs_off", "t_on", "t_off")}
 
     atrial_bpm = float(rng.uniform(*atrial_bpm_range))
     p_times = _gen_atrial_times(atrial_bpm, fs, n_samples, atrial_jitter, rng)
 
+    def _place_p(tp: int):
+        amp = float(rng.uniform(*beat_amp_range))
+        shift = int(rng.integers(-beat_shift_max, beat_shift_max + 1))
+        _place_template(sig, tp, p_template.waveform, p_template.peak_offset,
+                        amp, shift)
+        peak_at = tp + shift
+        on_s = peak_at - (p_template.peak_offset - p_template.on_offset)
+        off_s = peak_at + (p_template.off_offset - p_template.peak_offset)
+        if 0 <= on_s < n_samples and 0 <= off_s < n_samples:
+            labels["p_on"].append(on_s)
+            labels["p_off"].append(off_s)
+
+    def _place_qrst(tv: int):
+        amp = float(rng.uniform(*beat_amp_range))
+        shift = int(rng.integers(-beat_shift_max, beat_shift_max + 1))
+        _place_template(sig, tv, qrst_template.waveform,
+                        qrst_template.qrs_peak_offset, amp, shift)
+        peak_at = tv + shift
+        for k_on, k_off, attr_on, attr_off in (
+            ("qrs_on", "qrs_off",
+             qrst_template.qrs_on_offset, qrst_template.qrs_off_offset),
+            ("t_on", "t_off",
+             qrst_template.t_on_offset, qrst_template.t_off_offset),
+        ):
+            on_s = peak_at - (qrst_template.qrs_peak_offset - attr_on)
+            off_s = peak_at + (attr_off - qrst_template.qrs_peak_offset)
+            if 0 <= on_s < n_samples and 0 <= off_s < n_samples:
+                labels[k_on].append(on_s)
+                labels[k_off].append(off_s)
+
     if scenario == "complete":
-        v_bpm = float(rng.uniform(*escape_bpm_range))
+        bpm_range = (ventricular_bpm_range if is_ventricular_escape
+                     else junctional_bpm_range)
+        v_bpm = float(rng.uniform(*bpm_range))
         v_times = _gen_ventricular_for_complete(p_times, v_bpm, fs, n_samples,
                                                  vent_jitter, rng)
-        # Place each independent.
         for tp in p_times:
-            tmpl = bank.p[lead][int(rng.integers(0, len(bank.p[lead])))]
-            _add_template(sig, tp, tmpl.waveform, tmpl.peak_offset)
-            on_s = tp - (tmpl.peak_offset - tmpl.on_offset)
-            off_s = tp + (tmpl.off_offset - tmpl.peak_offset)
-            if 0 <= on_s < n_samples and 0 <= off_s < n_samples:
-                labels["p_on"].append(on_s)
-                labels["p_off"].append(off_s)
+            _place_p(tp)
         for tv in v_times:
-            tmpl = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
-            _add_template(sig, tv, tmpl.waveform, tmpl.qrs_peak_offset)
-            for k_on, k_off, attr_on, attr_off in (
-                ("qrs_on", "qrs_off", tmpl.qrs_on_offset, tmpl.qrs_off_offset),
-                ("t_on",   "t_off",   tmpl.t_on_offset,   tmpl.t_off_offset),
-            ):
-                on_s = tv - (tmpl.qrs_peak_offset - attr_on)
-                off_s = tv + (attr_off - tmpl.qrs_peak_offset)
-                if 0 <= on_s < n_samples and 0 <= off_s < n_samples:
-                    labels[k_on].append(on_s)
-                    labels[k_off].append(off_s)
+            _place_qrst(tv)
     else:
-        # Mobitz I or II: ventricular timing derived from p_times via PR rule.
         if scenario == "mobitz1":
             pairs = _gen_ventricular_for_mobitz1(p_times, fs, rng)
         elif scenario == "mobitz2":
             pairs = _gen_ventricular_for_mobitz2(p_times, fs, rng)
         else:
             raise ValueError(f"unknown scenario: {scenario}")
-        coupled_p_indices = {i for i, _ in pairs}
-        # Place all P templates (coupled and orphan).
-        for i, tp in enumerate(p_times):
-            tmpl = bank.p[lead][int(rng.integers(0, len(bank.p[lead])))]
-            _add_template(sig, tp, tmpl.waveform, tmpl.peak_offset)
-            on_s = tp - (tmpl.peak_offset - tmpl.on_offset)
-            off_s = tp + (tmpl.off_offset - tmpl.peak_offset)
-            if 0 <= on_s < n_samples and 0 <= off_s < n_samples:
-                labels["p_on"].append(on_s)
-                labels["p_off"].append(off_s)
+        for tp in p_times:
+            _place_p(tp)
         for _i, tv in pairs:
-            if not (0 <= tv < n_samples):
-                continue
-            tmpl = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
-            _add_template(sig, tv, tmpl.waveform, tmpl.qrs_peak_offset)
-            for k_on, k_off, attr_on, attr_off in (
-                ("qrs_on", "qrs_off", tmpl.qrs_on_offset, tmpl.qrs_off_offset),
-                ("t_on",   "t_off",   tmpl.t_on_offset,   tmpl.t_off_offset),
-            ):
-                on_s = tv - (tmpl.qrs_peak_offset - attr_on)
-                off_s = tv + (attr_off - tmpl.qrs_peak_offset)
-                if 0 <= on_s < n_samples and 0 <= off_s < n_samples:
-                    labels[k_on].append(on_s)
-                    labels[k_off].append(off_s)
+            if 0 <= tv < n_samples:
+                _place_qrst(tv)
 
     # z-norm to roughly match the model's input distribution.
     sig = (sig - sig.mean()) / (sig.std() + 1e-6)

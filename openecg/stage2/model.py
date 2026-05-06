@@ -207,3 +207,75 @@ class FrameClassifierViTReg(FrameClassifierViT):
         cls_logits = self.head(h)
         reg_offsets = self.reg_head(h)
         return cls_logits, reg_offsets
+
+
+class FrameClassifierViTRegAux(FrameClassifierViTReg):
+    """v13 Phase 1: ViT backbone with an auxiliary 4-class head tapped at
+    an intermediate transformer layer.
+
+    Splits the transformer into a lower stack (default 4 layers) and an upper
+    stack (remaining layers). Adds an aux classification head that supervises
+    the lower stack directly, encouraging the early layers to learn QRS-aware
+    features explicitly — the clinical workflow ("first identify QRS, then
+    locate P/T relative to it") expressed as an inductive bias.
+
+    The aux logits are NOT concatenated into the upper stack's input — that
+    is Phase 2. This is the lightest-touch variant.
+
+    Forward returns
+        cls_logits  [B, n_patches, n_classes]   (final 4-class output)
+        reg_offsets [B, n_patches, n_reg]       (boundary regression)
+        aux_logits  [B, n_patches, n_classes]   (intermediate 4-class output)
+    """
+
+    def __init__(self, aux_layer_split: int = 4, **kwargs):
+        super().__init__(**kwargs)
+        d_model = self.model_config["d_model"]
+        n_heads = self.model_config["n_heads"]
+        ff = self.model_config["ff"]
+        dropout = self.model_config["dropout"]
+        n_total = self.model_config["n_layers"]
+        n_lower = int(aux_layer_split)
+        n_upper = n_total - n_lower
+        if not (0 < n_lower < n_total):
+            raise ValueError(
+                f"aux_layer_split={aux_layer_split} must be in (0, {n_total})"
+            )
+
+        def _make_stack(n: int) -> nn.TransformerEncoder:
+            layer = nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=n_heads, dim_feedforward=ff,
+                dropout=dropout, activation="gelu",
+                batch_first=True, norm_first=True,
+            )
+            return nn.TransformerEncoder(layer, num_layers=n)
+
+        self.lower_transformer = _make_stack(n_lower)
+        self.upper_transformer = _make_stack(n_upper)
+        del self.transformer
+        self.aux_head = nn.Linear(d_model, self.model_config["n_classes"])
+        self.model_config = dict(self.model_config)
+        self.model_config["arch"] = "vit_reg_aux"
+        self.model_config["aux_layer_split"] = n_lower
+
+    def forward(self, x, lead_id):
+        B, N = x.shape
+        n_patches = N // self.patch_size
+        if self.conv_stem:
+            h = torch.nn.functional.gelu(self.stem_conv1(x.unsqueeze(1)))
+            h = torch.nn.functional.gelu(self.stem_conv2(h))
+            h = h.transpose(1, 2)
+            patches = h.reshape(B, n_patches, self.patch_size * 32)
+        else:
+            patches = x.view(B, n_patches, self.patch_size)
+        h = self.patch_embed(patches)
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+        h_lower = self.lower_transformer(h)
+        aux_logits = self.aux_head(h_lower)
+        h_upper = self.upper_transformer(h_lower)
+        cls_logits = self.head(h_upper)
+        reg_offsets = self.reg_head(h_upper)
+        return cls_logits, reg_offsets, aux_logits
