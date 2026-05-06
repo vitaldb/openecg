@@ -19,7 +19,7 @@ import torch
 from torch import nn
 
 
-HUBERT_DEFAULT_MODEL_ID = "Edoardo-BS/hubert_ecg_small"
+HUBERT_DEFAULT_MODEL_ID = "Edoardo-BS/hubert-ecg-small"
 
 
 class HubertECGAdapter(nn.Module):
@@ -31,7 +31,9 @@ class HubertECGAdapter(nn.Module):
                  window_seconds: int = 5):
         super().__init__()
         from transformers import AutoModel
-        self.encoder = AutoModel.from_pretrained(model_id)
+        # HuBERT-ECG ships custom modeling code (configuration_hubert_ecg.py
+        # + modeling_hubert_ecg.py); trust_remote_code is required to load.
+        self.encoder = AutoModel.from_pretrained(model_id, trust_remote_code=True)
         self.hidden_dim = int(self.encoder.config.hidden_size)
         self.target_fs = int(target_fs)
         self.window_seconds = int(window_seconds)
