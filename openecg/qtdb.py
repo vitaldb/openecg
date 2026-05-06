@@ -177,17 +177,33 @@ def load_q1c_pu_merged(record_id: str, pu_lead: int = 0,
 
 
 def annotated_window(ann_dict: dict, window_samples: int = 2500, fs: int = 250) -> tuple[int, int] | None:
-    """Find a 10s (2500 samples @ 250Hz) window centered on the annotated region.
-    Returns (start, end) sample indices, or None if no annotations."""
-    all_samples = []
-    for k, v in ann_dict.items():
-        all_samples.extend(v)
+    """Find a `window_samples` window with the densest annotation coverage.
+
+    Returns (start, end) sample indices, or None if no annotations.
+
+    Why: q1c on some QTDB records (sel114, sel116, sel213, sele0112, ...)
+    annotates two disjoint short clusters separated by minutes of unannotated
+    signal. The earlier (min, max)/2 midpoint landed in the gap, producing
+    windows with zero annotations and silent model output (and silently wrong
+    training labels). Density-based selection always lands on a real cluster.
+    """
+    import bisect
+    all_samples = sorted(s for v in ann_dict.values() for s in v)
     if not all_samples:
         return None
-    mid = (min(all_samples) + max(all_samples)) // 2
-    start = max(0, mid - window_samples // 2)
-    end = start + window_samples
-    return (start, end)
+    best_count = -1
+    best_start = max(0, all_samples[0] - window_samples // 2)
+    half = window_samples // 2
+    for anchor in all_samples:
+        start = max(0, anchor - half)
+        end = start + window_samples
+        lo = bisect.bisect_left(all_samples, start)
+        hi = bisect.bisect_right(all_samples, end)
+        count = hi - lo
+        if count > best_count:
+            best_count = count
+            best_start = start
+    return (best_start, best_start + window_samples)
 
 
 def load_annotations_as_super(record_id: str, window: tuple[int, int] | None = None) -> dict[str, list[int]]:

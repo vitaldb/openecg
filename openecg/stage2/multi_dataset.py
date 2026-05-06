@@ -48,6 +48,27 @@ def _decimate_to_250(sig, fs_native):
     return scipy_signal.decimate(sig, factor, zero_phase=True)
 
 
+def _find_annotation_clusters(samples, gap):
+    """Group annotation sample indices into clusters of contiguous beats.
+
+    Two consecutive sorted samples in different clusters iff their gap > `gap`.
+    Returns a list of (lo, hi) inclusive sample-index ranges, one per cluster.
+    Empty input returns []. Singletons return [(s, s)].
+    """
+    if not samples:
+        return []
+    s_sorted = sorted(samples)
+    clusters = []
+    cur_lo = cur_hi = s_sorted[0]
+    for s in s_sorted[1:]:
+        if s - cur_hi > gap:
+            clusters.append((cur_lo, cur_hi))
+            cur_lo = s
+        cur_hi = s
+    clusters.append((cur_lo, cur_hi))
+    return clusters
+
+
 class CombinedFrameDataset(Dataset):
     """Eager-load combined train/val from multiple datasets.
 
@@ -56,7 +77,10 @@ class CombinedFrameDataset(Dataset):
 
     LEAD_TO_ID = {lead: i for i, lead in enumerate(ludb.LEADS_12)}
 
-    def __init__(self, sources: list[str]):
+    def __init__(self, sources: list[str], qtdb_q1c_pu_merge: bool = True,
+                 qtdb_min_anns_per_window: int = 4):
+        self._qtdb_q1c_pu_merge = qtdb_q1c_pu_merge
+        self._qtdb_min_anns_per_window = qtdb_min_anns_per_window
         self.items = []           # list of (source, key) for debugging
         self.cache = []           # list of (sig_250, lead_idx, labels)
 
@@ -109,10 +133,14 @@ class CombinedFrameDataset(Dataset):
     def _load_qtdb(self):
         n_loaded = 0
         n_skipped = 0
+        n_sparse = 0
         for rid in qtdb.records_with_q1c():
             try:
                 record = qtdb.load_record(rid)
-                ann = qtdb.load_q1c(rid)
+                if self._qtdb_q1c_pu_merge:
+                    ann = qtdb.load_q1c_pu_merged(rid, pu_lead=0)
+                else:
+                    ann = qtdb.load_q1c(rid)
             except Exception:
                 continue
             win = qtdb.annotated_window(ann, window_samples=WINDOW_SAMPLES, fs=250)
@@ -122,6 +150,13 @@ class CombinedFrameDataset(Dataset):
             if end > 225000:
                 end = 225000
                 start = end - WINDOW_SAMPLES
+            # Sparsity guard: skip the record if even the densest window has
+            # too few annotations (model would otherwise learn all-OTHER bias).
+            n_in_win = sum(1 for k in ("p_on","p_off","qrs_on","qrs_off","t_on","t_off")
+                           for s in ann.get(k, []) if start <= s < end)
+            if n_in_win < self._qtdb_min_anns_per_window:
+                n_sparse += 1
+                continue
 
             # Build per-frame labels for the window (independent of lead).
             win_ann = {k: [s - start for s in v if start <= s < end] for k, v in ann.items()}
@@ -153,7 +188,8 @@ class CombinedFrameDataset(Dataset):
                 sig_n = _normalize(sig)
                 self._add(sig_n, lead_idx, labels.copy(), ("qtdb", rid, lead_name))
                 n_loaded += 1
-        print(f"QTDB: loaded {n_loaded} sequences (skipped {n_skipped} with unmappable leads)")
+        print(f"QTDB: loaded {n_loaded} sequences (skipped {n_skipped} unmappable, "
+              f"{n_sparse} sparse-window records)")
 
     def _load_isp(self, split: str):
         rec_ids = isp.load_split()[split]
@@ -259,7 +295,8 @@ class QTDBSlidingDataset(Dataset):
 
     def __init__(self, fs=250, scale_factors=(0.9, 1.0, 1.1, 1.2),
                  windows_per_record=20, margin_samples=1000, seed=42,
-                 ignore_missing_waves=False, q1c_pu_merge=False):
+                 ignore_missing_waves=False, q1c_pu_merge=False,
+                 cluster_gap_samples=12500, min_anns_per_window=4):
         """
         ignore_missing_waves: if True, when a wave type has unpaired on/off
             (e.g., q1c with t_off but no t_on), mark a region around the
@@ -267,9 +304,19 @@ class QTDBSlidingDataset(Dataset):
         q1c_pu_merge: if True, fill missing wave-onsets in q1c from pu0
             (matched by QRS_on proximity). Mutually exclusive with the IGNORE
             approach.
+        cluster_gap_samples: q1c on some records (sel114, sel116, ...) has two
+            disjoint annotation clusters minutes apart. Using (ann_min, ann_max)
+            as the sampling span produced training windows in the unannotated
+            gap labelled all-OTHER, which the model dutifully learned. Annotation
+            samples separated by more than this threshold start a new cluster;
+            window centers are sampled only from inside a cluster.
+        min_anns_per_window: minimum number of annotation samples required
+            inside a chosen window. Sparser windows are resampled.
         """
         self._ignore_missing_waves = ignore_missing_waves
         self._q1c_pu_merge = q1c_pu_merge
+        self._cluster_gap_samples = cluster_gap_samples
+        self._min_anns_per_window = min_anns_per_window
         import scipy.signal as scipy_signal
         self.fs = fs
         self.scale_factors = tuple(scale_factors)
@@ -294,6 +341,8 @@ class QTDBSlidingDataset(Dataset):
                 continue
             ann_min = min(all_pos)
             ann_max = max(all_pos)
+            clusters_orig = _find_annotation_clusters(
+                all_pos, gap=self._cluster_gap_samples)
             mappable = []
             for lead_name, sig in rec.items():
                 if lead_name in QTDB_LEAD_TO_LUDB_ID:
@@ -320,8 +369,14 @@ class QTDBSlidingDataset(Dataset):
                          for k, vals in ann.items()}
                 ann_min_r = int(round(ann_min * n_new / n_orig))
                 ann_max_r = int(round(ann_max * n_new / n_orig))
+                clusters_r = [(int(round(lo * n_new / n_orig)),
+                               int(round(hi * n_new / n_orig)))
+                              for lo, hi in clusters_orig]
+                ann_pos_r = sorted(int(round(v * n_new / n_orig))
+                                    for v in all_pos)
                 cache[f] = {"n": n_new, "leads": lead_sigs,
-                            "ann": ann_r, "ann_min": ann_min_r, "ann_max": ann_max_r}
+                            "ann": ann_r, "ann_min": ann_min_r, "ann_max": ann_max_r,
+                            "clusters": clusters_r, "ann_pos": ann_pos_r}
             self.records.append({"rid": rid, "leads": mappable, "cache": cache})
         print(f"QTDBSliding: loaded {len(self.records)} records "
               f"({sum(len(r['leads']) for r in self.records)} record-lead pairs) "
@@ -349,6 +404,7 @@ class QTDBSlidingDataset(Dataset):
         return np.maximum(counts, 1)
 
     def _build_window(self, record_entry, lead_entry):
+        import bisect
         lead_name, lead_idx, _ = lead_entry
         # Pick a pre-cached scale factor uniformly at random
         f = float(self.rng.choice(self.scale_factors))
@@ -356,19 +412,48 @@ class QTDBSlidingDataset(Dataset):
         n_new = cache_f["n"]
         sig_resampled = cache_f["leads"][lead_name]
         ann_r = cache_f["ann"]
-        ann_min_r = cache_f["ann_min"]
-        ann_max_r = cache_f["ann_max"]
-
-        # Pick window such that it contains at least margin samples of annotated region
+        clusters = cache_f.get("clusters") or [(cache_f["ann_min"], cache_f["ann_max"])]
+        ann_pos = cache_f.get("ann_pos", [])
         margin = self.margin_samples
-        win_start_min = max(0, ann_min_r - WINDOW_SAMPLES + margin)
-        win_start_max = min(n_new - WINDOW_SAMPLES, ann_max_r - margin)
-        if win_start_max < win_start_min:
-            win_start = max(0, min(n_new - WINDOW_SAMPLES,
-                                    (ann_min_r + ann_max_r) // 2 - WINDOW_SAMPLES // 2))
-        else:
-            win_start = int(self.rng.integers(win_start_min, win_start_max + 1))
+
+        # Sample a window that overlaps a real annotation cluster (avoids the
+        # min/max-midpoint trap on records with disjoint q1c clusters). Retry
+        # up to a few times if the chosen window is too sparse.
+        win_start = None
+        for _ in range(8):
+            cluster_lo, cluster_hi = clusters[int(self.rng.integers(0, len(clusters)))]
+            win_start_min = max(0, cluster_lo - WINDOW_SAMPLES + margin)
+            win_start_max = min(n_new - WINDOW_SAMPLES, cluster_hi - margin)
+            if win_start_max < win_start_min:
+                # Cluster shorter than window-2*margin: center on it.
+                cand = max(0, min(n_new - WINDOW_SAMPLES,
+                                  (cluster_lo + cluster_hi) // 2 - WINDOW_SAMPLES // 2))
+            else:
+                cand = int(self.rng.integers(win_start_min, win_start_max + 1))
+            if ann_pos:
+                lo = bisect.bisect_left(ann_pos, cand)
+                hi = bisect.bisect_right(ann_pos, cand + WINDOW_SAMPLES)
+                if hi - lo >= self._min_anns_per_window:
+                    win_start = cand
+                    break
+            else:
+                win_start = cand
+                break
+        if win_start is None:
+            # Fall back to whichever cluster center we last picked, even if sparse.
+            win_start = cand
         win_end = win_start + WINDOW_SAMPLES
+
+        # Recompute the local "annotated span" for IGNORE/OTHER labelling:
+        # only annotations falling inside [win_start, win_end] count.
+        local_anns = [s for s in ann_pos if win_start <= s < win_end]
+        if local_anns:
+            ann_min_r = min(local_anns)
+            ann_max_r = max(local_anns)
+        else:
+            # No annotations in window — should be rare after the loop above.
+            ann_min_r = win_start
+            ann_max_r = win_start - 1  # makes local span empty
 
         sig_win = sig_resampled[win_start:win_end].astype(np.float32)
         sig_win = ((sig_win - sig_win.mean()) / (sig_win.std() + 1e-6)).astype(np.float32)
