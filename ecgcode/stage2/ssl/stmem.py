@@ -5,6 +5,25 @@ Spec: docs/superpowers/specs/2026-05-06-v12-ssl-boundary-design.md sec 5.3.
 
 Vendored source expected at third_party/ST-MEM/. We import lazily so the
 package is loadable even when the vendored module is absent (tests skip).
+
+KNOWN UPSTREAM-API MISMATCHES (discovered post-spec; not fixed here):
+  * Actual class is `ST_MEM_ViT` in `models.encoder.st_mem_vit`, not
+    `ECGViT`. The candidate list below is wrong against bakqui/ST-MEM.
+    Factory fns: `st_mem_vit_small / st_mem_vit_base`.
+  * `ST_MEM_ViT.forward` returns a pooled `[B, width]` vector (mean over
+    lead+time), NOT per-frame `[B, T, d]`. Forward path here will crash
+    on torch.cat / interpolate against real weights — needs to fork
+    forward_encoding to expose pre-pool token states.
+  * Embedding dim attribute is `width`, not `embed_dim` / `hidden_dim`.
+  * Released checkpoint uses `seq_len=2250, patch_size=75` (9-second
+    windows). `window_samples=1250` is not divisible by 75 and does not
+    match the pretrained patch_embed.
+
+Phase 4 (run 5/6 training) cannot proceed against canonical bakqui/ST-MEM
+until these are addressed. Iterate against vendored source on first real
+`--mode lp` invocation. The current adapter passes its offline test (with
+a synthetic encoder that follows the assumed shape contract) so the rest
+of the v12 plumbing remains self-consistent.
 """
 
 from __future__ import annotations
