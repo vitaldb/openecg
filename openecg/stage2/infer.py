@@ -210,12 +210,17 @@ REG_CHANNELS = ("p_on", "p_off", "qrs_on", "qrs_off", "t_on", "t_off")
 
 @torch.no_grad()
 def predict_frames_with_reg(model, sig, lead_id, device="cuda"):
-    """Single-sequence inference for a (cls, reg) tuple-output model.
+    """Single-sequence inference for a (cls, reg, [aux]) tuple-output model.
     Returns (frames[T] uint8, reg_offsets[T, 6] float32).
+
+    Accepts both 2-tuple FrameClassifierViTReg and 3-tuple
+    FrameClassifierViTRegAux outputs (aux is ignored at inference).
     """
     x = torch.from_numpy(sig.astype(np.float32)).unsqueeze(0).to(device)
     lid = torch.tensor([lead_id], dtype=torch.long, device=device)
-    cls_logits, reg = model(x, lid)
+    out = model(x, lid)
+    cls_logits = out[0]
+    reg = out[1]
     frames = cls_logits.argmax(dim=-1).cpu().numpy().squeeze(0).astype(np.uint8)
     reg_np = reg.cpu().numpy().squeeze(0).astype(np.float32)
     return frames, reg_np
