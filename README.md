@@ -41,15 +41,16 @@ For wave segmentation on a real ECG signal (10s, 250 Hz, single lead → per-fra
 
 ## Performance
 
-Headline numbers come from the current best checkpoint, **`stage2_v12_reg.pt`** — a Conv+Transformer per-frame classifier with a parallel boundary-regression head, trained jointly on LUDB + QTDB + ISP. Average F1 across the six P / QRS / T on/off boundaries (Martinez per-boundary tolerances: P 50 ms, QRS 40 ms, T_on 50 ms, T_off 100 ms):
+Headline numbers come from the current best checkpoint, **`stage2_v15_canonical.pt`** — a Conv+Transformer per-frame classifier with a parallel boundary-regression head and an auxiliary QRS head tapped after the lower 4 transformer layers, **whose softmaxed logits are concatenated with the lower features and projected back into the upper transformer's input** (Phase 2 of the QRS-first hierarchy). Trained jointly on LUDB + QTDB + ISP + a synthetic AV-block mix that includes Mobitz I / II / complete + paced ventricular escape scenarios. Average F1 across the six P / QRS / T on/off boundaries (Martinez per-boundary tolerances: P 50 ms, QRS 40 ms, T_on 50 ms, T_off 100 ms):
 
-| Dataset (eval split) | OpenECG v12_reg | Reference SOTA |
-|---|---|---|
-| **ISP test** | **0.966** | SemiSegECG 2025 (semi-supervised) ≈ 0.97 |
-| **LUDB val** | **0.947** | DENS-ECG / Moskalenko 2020 ≈ 0.97 |
-| **QTDB pu0** | **0.847** | Martinez 2004 wavelet ≈ 0.97 (T-annotated subset only) |
+| Dataset (eval split) | OpenECG v15 | OpenECG v13_aux | OpenECG v12_reg (legacy) | Reference SOTA |
+|---|---|---|---|---|
+| **LUDB val** | 0.947 | **0.953** | 0.947 | DENS-ECG / Moskalenko 2020 ≈ 0.97 |
+| **ISP test** | **0.967** | 0.964 | 0.966 | SemiSegECG 2025 (semi-supervised) ≈ 0.97 |
+| **QTDB pu0** | **0.859** | 0.856 | 0.847 | Martinez 2004 wavelet ≈ 0.97 (T-annotated subset only) |
+| **BUT PDB AVB peak F1** | **0.714** | 0.680 | 0.709 | — (only public AVB dataset with P labels) |
 
-The boundary-regression head is the largest single jump in the program. Median boundary timing error is **≤20 ms on every wave on every dataset**, meeting the clinical spec target. Full design notes are in `docs/superpowers/specs/2026-05-06-v12-postmortem.md`; the QTDB +0.020 lift over the original v12_reg comes from `fix(qtdb): density-based window selection`, which corrected a label-window bug that had silenced ~12 % of q1c records during training (`scripts/verify_qtdb_fix.py`). Run `scripts/sota_comparison.py` to reproduce per-boundary breakdowns.
+v15 is the first model that improves BUT PDB AVB peak F1 over the v12_reg baseline (+0.005) while also setting new records on ISP and QTDB. The concat path lets the upper layers see the explicit QRS estimate as an input feature — implementing the clinical "find P/T relative to QRS" workflow as an architectural prior. Median boundary timing error is **≤20 ms on every wave on every dataset**, meeting the clinical spec target. Full design notes are in `docs/superpowers/specs/2026-05-06-v12-postmortem.md`; the QTDB +0.020 lift over the original v12_reg came from `fix(qtdb): density-based window selection`, which corrected a label-window bug that had silenced ~12 % of q1c records during training (`scripts/verify_qtdb_fix.py`). Run `scripts/sota_comparison.py` to reproduce per-boundary breakdowns.
 
 Single-lead robustness across the 12 LUDB leads is documented in `scripts/per_lead_v4.py`; lead III and aVL are the physiologically expected weak spots (small P / T amplitude due to axis orthogonality), which are uncommon as sole monitoring leads in clinical practice.
 
@@ -62,7 +63,13 @@ $env:OPENECG_LUDB_ZIP = "<path-to-LUDB-zip>"
 
 uv run pytest                              # unit + stage2 (LUDB integration if env set)
 
-# Train the current best (v12_reg) — needs CUDA
+# Train the current best (v15 concat+paced) — needs CUDA, ~1 h on RTX 4090
+uv run python scripts/retrain_v15_concat_paced.py  # → data/checkpoints/stage2_v15_concat_paced.pt
+
+# Phase 1 ablation (aux QRS head only, no concat)
+uv run python scripts/retrain_v13_aux_qrs.py   # → data/checkpoints/stage2_v13_aux.pt
+
+# Original boundary-only baseline (kept for backward compatibility)
 uv run python scripts/train_v12_reg.py     # → data/checkpoints/stage2_v12_reg.pt
 
 # Reproduce the headline table

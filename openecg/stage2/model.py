@@ -279,3 +279,50 @@ class FrameClassifierViTRegAux(FrameClassifierViTReg):
         cls_logits = self.head(h_upper)
         reg_offsets = self.reg_head(h_upper)
         return cls_logits, reg_offsets, aux_logits
+
+
+class FrameClassifierViTRegAuxConcat(FrameClassifierViTRegAux):
+    """v15 Phase 2: aux output is fed forward into the upper transformer
+    input via a learned projection.
+
+    The aux head's QRS-aware logits (after softmax) are concatenated with
+    the lower-stack features and projected back to d_model before entering
+    the upper stack. The upper stack's attention can therefore use the
+    explicit QRS-confidence channel as input — the architectural form of
+    the clinical "find paced/wide QRS near where a QRS already is" hint.
+
+    Forward returns (cls_logits, reg_offsets, aux_logits) just like the
+    parent so existing trainers / inference helpers stay compatible.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        d_model = self.model_config["d_model"]
+        n_classes = self.model_config["n_classes"]
+        self.aux_to_upper_proj = nn.Linear(d_model + n_classes, d_model)
+        self.model_config = dict(self.model_config)
+        self.model_config["arch"] = "vit_reg_aux_concat"
+
+    def forward(self, x, lead_id):
+        B, N = x.shape
+        n_patches = N // self.patch_size
+        if self.conv_stem:
+            h = torch.nn.functional.gelu(self.stem_conv1(x.unsqueeze(1)))
+            h = torch.nn.functional.gelu(self.stem_conv2(h))
+            h = h.transpose(1, 2)
+            patches = h.reshape(B, n_patches, self.patch_size * 32)
+        else:
+            patches = x.view(B, n_patches, self.patch_size)
+        h = self.patch_embed(patches)
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+        h_lower = self.lower_transformer(h)
+        aux_logits = self.aux_head(h_lower)
+        aux_probs = torch.softmax(aux_logits, dim=-1)
+        h_upper_in = self.aux_to_upper_proj(torch.cat([h_lower, aux_probs], dim=-1))
+        h_upper = self.upper_transformer(h_upper_in)
+        cls_logits = self.head(h_upper)
+        reg_offsets = self.reg_head(h_upper)
+        return cls_logits, reg_offsets, aux_logits
