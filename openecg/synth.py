@@ -40,7 +40,7 @@ from openecg import ludb
 LEADS_12 = ludb.LEADS_12
 WINDOW_SAMPLES_DEFAULT = 2500   # 10s @ 250Hz
 
-Scenario = Literal["mobitz1", "mobitz2", "complete"]
+Scenario = Literal["mobitz1", "mobitz2", "complete", "paced"]
 
 
 @dataclass
@@ -79,16 +79,25 @@ def _baseline_subtract(seg: np.ndarray) -> np.ndarray:
 
 
 class TemplateBank:
-    """Per-lead bank of clean P and QRS-T templates from sinus LUDB records.
+    """Per-lead bank of clean P, QRS-T, and (optionally) paced QRS-T templates
+    from real LUDB records.
 
     All templates are stored at `fs` (default 250 Hz). The native LUDB rate
     is 500 Hz; we decimate during extraction.
+
+    Three template buckets:
+      * `p[lead]`         : P-wave templates (sinus only)
+      * `qrst[lead]`      : narrow QRS-T templates (sinus only)
+      * `qrst_paced[lead]`: wide paced QRS-T templates (LUDB paced records,
+                            excluding the 3°AVB-paced cohort that overlaps
+                            with our test set)
     """
 
     def __init__(self, fs: int = 250):
         self.fs = fs
         self.p: dict[str, list[_PTemplate]] = {l: [] for l in LEADS_12}
         self.qrst: dict[str, list[_QRSTTemplate]] = {l: [] for l in LEADS_12}
+        self.qrst_paced: dict[str, list[_QRSTTemplate]] = {l: [] for l in LEADS_12}
         self.iso_baselines: dict[str, list[np.ndarray]] = {l: [] for l in LEADS_12}
 
     @classmethod
@@ -99,20 +108,33 @@ class TemplateBank:
         fs: int = 250,
         max_per_lead: int = 600,
         only_sinus: bool = True,
+        paced_record_ids: Iterable[int] | None = None,
+        exclude_avb_paced: bool = True,
     ) -> "TemplateBank":
-        """Build a bank from a list of LUDB records.
+        """Build a bank from LUDB records.
 
-        Defaults to all sinus-rhythm records (143 of 200) if `record_ids`
-        is None and `only_sinus` is True.
+        Args:
+            record_ids: source records for sinus P / QRS-T templates. Defaults
+                to all sinus-rhythm records when `only_sinus` is True.
+            paced_record_ids: source records for the wide paced QRS-T
+                templates. If None, defaults to all LUDB paced records.
+                When `exclude_avb_paced` is True, the 3°AVB-paced records
+                that also appear in our held-out evaluation cohort
+                (rid 34, 74, 90, 104, 111) are removed to avoid leak.
         """
         bank = cls(fs=fs)
+        meta = ludb.load_metadata()
         if record_ids is None:
-            meta = ludb.load_metadata()
             if only_sinus:
                 record_ids = [r["id_int"] for r in meta
                               if r["rhythm"].lower() == "sinus rhythm"]
             else:
                 record_ids = [r["id_int"] for r in meta]
+        if paced_record_ids is None:
+            paced_record_ids = [r["id_int"] for r in meta if r.get("pacemaker")]
+        if exclude_avb_paced:
+            paced_record_ids = [rid for rid in paced_record_ids
+                                if rid not in {34, 74, 90, 104, 111}]
         if leads is None:
             leads = LEADS_12
         leads = tuple(leads)
@@ -126,12 +148,26 @@ class TemplateBank:
                 sig_500 = signal_500.get(lead)
                 if sig_500 is None:
                     continue
-                # Decimate 500 -> 250 Hz
                 sig = scipy_signal.decimate(sig_500, 500 // fs, zero_phase=True)
                 ann500 = ludb.load_annotations(rid, lead)
                 ann = {k: [int(round(v * fs / 500)) for v in vals]
                        for k, vals in ann500.items()}
                 bank._extract_from_record(sig, ann, lead, max_per_lead)
+
+        for rid in paced_record_ids:
+            try:
+                signal_500 = ludb.load_record(rid)
+            except Exception:
+                continue
+            for lead in leads:
+                sig_500 = signal_500.get(lead)
+                if sig_500 is None:
+                    continue
+                sig = scipy_signal.decimate(sig_500, 500 // fs, zero_phase=True)
+                ann500 = ludb.load_annotations(rid, lead)
+                ann = {k: [int(round(v * fs / 500)) for v in vals]
+                       for k, vals in ann500.items()}
+                bank._extract_paced_qrst(sig, ann, lead, max_per_lead)
         return bank
 
     # ---- extraction internals --------------------------------------------
@@ -194,6 +230,50 @@ class TemplateBank:
 
         # ISO baseline: the longest run of "no annotation" within the labeled
         # range. We use the labeled_range start..first p_on as a quiet patch.
+        return self._iso_extract(sig, ann, lead)
+
+    def _extract_paced_qrst(self, sig, ann, lead, max_per_lead):
+        """Same proximity-pairing as _extract_from_record but stores into
+        qrst_paced[lead]. P templates are NOT collected from paced records
+        because the P-wave morphology of a 3°AVB-paced patient is still
+        normal sinus (atrial focus is unaffected); reusing the sinus P bank
+        gives a wider variety of P shapes."""
+        n = len(sig)
+        max_qt_gap = int(0.6 * self.fs)
+        t_on_arr = np.asarray(ann.get("t_on", []), dtype=np.int64)
+        t_peak_arr = np.asarray(ann.get("t_peak", []), dtype=np.int64)
+        t_off_arr = np.asarray(ann.get("t_off", []), dtype=np.int64)
+        qrs_triplets = list(zip(ann.get("qrs_on", []),
+                                ann.get("qrs_peak", []),
+                                ann.get("qrs_off", [])))
+        if not (len(t_on_arr) > 0
+                and len(t_off_arr) == len(t_on_arr) == len(t_peak_arr)):
+            return
+        for q_on, q_peak, q_off in qrs_triplets:
+            idx = np.searchsorted(t_on_arr, q_off)
+            if idx >= len(t_on_arr):
+                continue
+            if t_on_arr[idx] - q_off > max_qt_gap:
+                continue
+            t_on = int(t_on_arr[idx]); t_off = int(t_off_arr[idx])
+            lo = max(0, q_on - QRST_MARGIN)
+            hi = min(n, t_off + QRST_MARGIN + 1)
+            if hi - lo < 8:
+                continue
+            seg = _baseline_subtract(sig[lo:hi])
+            self.qrst_paced[lead].append(_QRSTTemplate(
+                waveform=seg,
+                qrs_on_offset=q_on - lo,
+                qrs_peak_offset=q_peak - lo,
+                qrs_off_offset=q_off - lo,
+                t_on_offset=t_on - lo,
+                t_off_offset=t_off - lo,
+            ))
+            if len(self.qrst_paced[lead]) >= max_per_lead:
+                break
+
+    def _iso_extract(self, sig, ann, lead):
+        n = len(sig)
         rng_lab = (min(min(ann["p_on"], default=n), min(ann["qrs_on"], default=n)),
                    max(max(ann["t_off"], default=0), max(ann["qrs_off"], default=0)))
         if rng_lab[0] >= 32:
@@ -383,6 +463,7 @@ def generate_avb_window(
     atrial_bpm_range: tuple[float, float] = (60.0, 100.0),
     junctional_bpm_range: tuple[float, float] = (40.0, 60.0),
     ventricular_bpm_range: tuple[float, float] = (25.0, 45.0),
+    paced_bpm_range: tuple[float, float] = (50.0, 80.0),
     atrial_jitter: float = 0.03,
     vent_jitter: float = 0.03,
     # Per-beat morphology jitter — small enough to preserve the regular,
@@ -431,7 +512,17 @@ def generate_avb_window(
 
     # Single P / QRS-T template per window (consistent morphology across beats).
     p_template = bank.p[lead][int(rng.integers(0, len(bank.p[lead])))]
-    qrst_template = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
+    if scenario == "paced":
+        paced_bank = bank.qrst_paced.get(lead) or []
+        if not paced_bank:
+            # Fallback: stretch a sinus template if no paced templates available.
+            tmpl = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
+            scale = float(rng.uniform(*qrs_stretch_range))
+            qrst_template = _stretch_qrst(tmpl, scale)
+        else:
+            qrst_template = paced_bank[int(rng.integers(0, len(paced_bank)))]
+    else:
+        qrst_template = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
 
     # Pick escape mechanism for complete AVB (junctional vs ventricular).
     is_ventricular_escape = (
@@ -481,6 +572,18 @@ def generate_avb_window(
         bpm_range = (ventricular_bpm_range if is_ventricular_escape
                      else junctional_bpm_range)
         v_bpm = float(rng.uniform(*bpm_range))
+        v_times = _gen_ventricular_for_complete(p_times, v_bpm, fs, n_samples,
+                                                 vent_jitter, rng)
+        for tp in p_times:
+            _place_p(tp)
+        for tv in v_times:
+            _place_qrst(tv)
+    elif scenario == "paced":
+        # Atrium fires at sinus rate independently of the pacemaker, which
+        # drives the ventricle at a fixed paced rate. Same independence
+        # structure as complete AVB but with a real paced QRS-T morphology
+        # (wide, no preceding P-wave coupling).
+        v_bpm = float(rng.uniform(*paced_bpm_range))
         v_times = _gen_ventricular_for_complete(p_times, v_bpm, fs, n_samples,
                                                  vent_jitter, rng)
         for tp in p_times:

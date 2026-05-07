@@ -57,11 +57,12 @@ def main():
     )
     for lead in ("ii", "v1"):
         print(f"  {lead}: P templates={len(bank.p[lead])}  "
-              f"QRS-T templates={len(bank.qrst[lead])}", flush=True)
+              f"QRS-T sinus={len(bank.qrst[lead])}  "
+              f"QRS-T paced={len(bank.qrst_paced[lead])}", flush=True)
 
     rng = np.random.default_rng(0)
     for lead in ("ii", "v1"):
-        for scenario in ("mobitz1", "mobitz2", "complete"):
+        for scenario in ("mobitz1", "mobitz2", "complete", "paced"):
             for k in range(3):
                 sig, labels = synth.generate_avb_window(
                     bank, lead, scenario, rng, fs=FS, duration_s=10.0,

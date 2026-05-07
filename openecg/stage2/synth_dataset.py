@@ -68,7 +68,7 @@ class SyntheticAVBDataset(Dataset):
     def __init__(self,
                  bank: synth.TemplateBank,
                  leads: tuple[str, ...] = ("ii", "v1", "i", "v5", "v2"),
-                 scenarios: tuple[str, ...] = ("mobitz1", "mobitz2", "complete"),
+                 scenarios: tuple[str, ...] = ("mobitz1", "mobitz2", "complete", "paced"),
                  n_windows: int = 2000,
                  base_seed: int | None = 12345):
         self.bank = bank
