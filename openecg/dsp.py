@@ -650,4 +650,170 @@ def find_peaks(
     return peaks, props
 
 
-__all__ = ["butter", "lfilter", "lfilter_zi", "filtfilt", "find_peaks"]
+# -- Wavelets (minimal vendored subset of PyWavelets) ------------------------
+#
+# Provides the three primitives used by openvital's ecg_annotator:
+#   wavedec(data, wavelet, level)   — DWT decomposition
+#   waverec(coeffs, wavelet)        — DWT reconstruction
+#   cwt(data, scales, 'gaus1')      — single-/multi-scale Gaussian-1
+#                                       continuous wavelet transform
+#
+# Conventions match pywt with mode='symmetric' (the pywt default):
+#   - Half-sample symmetric boundary extension by `filter_len-1` samples
+#   - Filters applied via correlation (not convolution) and downsampled
+#     starting at index 1 (so output length = (input + flen-1) // 2)
+#
+# Wavelet specifier accepts either a known name ('db2') or a 4-tuple
+# (lo_d, hi_d, lo_r, hi_r) of filter coefficients — same shape as
+# pywt.Wavelet.filter_bank.
+
+# Daubechies-2 filter bank (4-tap, orthogonal). Identical to pywt.Wavelet('db2').
+_DB2_LO_D = np.array([-0.12940952255126037, 0.22414386804201340,
+                       0.83651630373780790, 0.48296291314453416])
+_DB2_HI_D = np.array([-0.48296291314453416, 0.83651630373780790,
+                       -0.22414386804201340, -0.12940952255126037])
+_DB2_LO_R = np.array([0.48296291314453416, 0.83651630373780790,
+                       0.22414386804201340, -0.12940952255126037])
+_DB2_HI_R = np.array([-0.12940952255126037, -0.22414386804201340,
+                       0.83651630373780790, -0.48296291314453416])
+
+_KNOWN_WAVELETS = {
+    "db2": (_DB2_LO_D, _DB2_HI_D, _DB2_LO_R, _DB2_HI_R),
+}
+
+
+def _resolve_wavelet(wavelet):
+    """Return (lo_d, hi_d, lo_r, hi_r) given a name or a 4-tuple.
+
+    Filters of odd length are zero-padded to even length on the right,
+    matching PyWavelets's ``Wavelet(filter_bank=...)`` constructor (it
+    internally rounds up to even). This affects e.g. the 3-tap
+    interpolation wavelet used by openvital's ecg_annotator.
+    """
+    if isinstance(wavelet, str):
+        if wavelet not in _KNOWN_WAVELETS:
+            raise ValueError(
+                f"unknown wavelet name {wavelet!r}; supported: "
+                f"{sorted(_KNOWN_WAVELETS)}. For other wavelets, pass a "
+                f"4-tuple (lo_d, hi_d, lo_r, hi_r)."
+            )
+        return _KNOWN_WAVELETS[wavelet]
+    fb = tuple(np.asarray(f, dtype=np.float64) for f in wavelet)
+    if len(fb) != 4:
+        raise ValueError("filter_bank must have 4 entries: (lo_d, hi_d, lo_r, hi_r)")
+    flen = len(fb[0])
+    if flen % 2 == 1:
+        fb = tuple(np.concatenate([f, [0.0]]) for f in fb)
+    return fb
+
+
+def _dwt_single(x, lo_d, hi_d):
+    """Single-level DWT — matches pywt.dwt(..., mode='symmetric')."""
+    flen = len(lo_d)
+    ext = np.pad(x, flen - 1, mode="symmetric")
+    cA = np.convolve(ext, lo_d, mode="valid")[1::2]
+    cD = np.convolve(ext, hi_d, mode="valid")[1::2]
+    return cA, cD
+
+
+def wavedec(data, wavelet, level: int) -> list[np.ndarray]:
+    """Multilevel DWT decomposition.
+
+    Returns ``[cA_level, cD_level, cD_{level-1}, ..., cD_1]`` to match
+    PyWavelets's pywt.wavedec(..., mode='symmetric').
+    """
+    lo_d, hi_d, _, _ = _resolve_wavelet(wavelet)
+    a = np.asarray(data, dtype=np.float64).copy()
+    details = []
+    for _ in range(int(level)):
+        a, cD = _dwt_single(a, lo_d, hi_d)
+        details.append(cD)
+    return [a] + details[::-1]
+
+
+def _idwt_single(cA, cD, lo_r, hi_r):
+    """Single-level inverse DWT — matches pywt.idwt(..., mode='symmetric').
+
+    Output length is ``2·len(cA) − flen + 2``, which may exceed the
+    matching cD length at the next level by 1; the multilevel waverec
+    handles that by truncating to the next cD's length.
+    """
+    flen = len(lo_r)
+    n = len(cA)
+    # Upsample by 2 (interleave zeros at odd positions, pywt convention).
+    up_a = np.zeros(2 * n)
+    up_a[1::2] = cA
+    up_d = np.zeros(2 * n)
+    up_d[1::2] = cD
+    rec = np.convolve(up_a, lo_r, mode="full") + np.convolve(up_d, hi_r, mode="full")
+    # pywt's idwt output length is consistently 2n − 2 (independent of
+    # filter length); equivalent to dropping (flen − 1) samples from the
+    # left of the full-convolution output and keeping the next 2n − 2.
+    drop = flen - 1
+    return rec[drop : drop + 2 * n - 2]
+
+
+def waverec(coeffs, wavelet) -> np.ndarray:
+    """Multilevel DWT reconstruction (inverse of wavedec)."""
+    _, _, lo_r, hi_r = _resolve_wavelet(wavelet)
+    a = np.asarray(coeffs[0], dtype=np.float64).copy()
+    for cD in coeffs[1:]:
+        cD = np.asarray(cD, dtype=np.float64)
+        # cA from previous level may be 1 sample longer than cD at this
+        # level due to pywt's odd-length quirks; truncate cA to match.
+        if len(a) > len(cD):
+            a = a[: len(cD)]
+        elif len(a) < len(cD):
+            # Pad cD if needed (rare).
+            cD = cD[: len(a)]
+        a = _idwt_single(a, cD, lo_r, hi_r)
+    return a
+
+
+def cwt(data, scales, wavelet: str = "gaus1") -> np.ndarray:
+    """Continuous Wavelet Transform — minimal subset of pywt.cwt.
+
+    Currently supports only ``wavelet='gaus1'`` (Gaussian 1st derivative,
+    the wavelet used by ecg_annotator). Returns ``(len(scales), len(data))``
+    array. The output sign and zero-crossing structure matches pywt's
+    output exactly; absolute amplitude differs by a wavelet-specific
+    normalization constant (downstream callers in ecg_annotator only use
+    sign / zero-crossings, so the difference is harmless).
+    """
+    if wavelet != "gaus1":
+        raise ValueError(
+            f"cwt only supports wavelet='gaus1'; got {wavelet!r}. "
+            f"For full pywt functionality install PyWavelets explicitly."
+        )
+    data = np.asarray(data, dtype=np.float64)
+    scales = np.atleast_1d(scales).astype(np.float64)
+    out = np.empty((scales.size, data.size), dtype=np.float64)
+    n = data.size
+    for i, s in enumerate(scales):
+        # gaus1 mother wavelet: ψ(t) = -2t · exp(-t²) · normalization.
+        # pywt uses a pre-integrated representation; we synthesize the
+        # mother wavelet directly and convolve. The sign convention
+        # below matches pywt's output sign for the gaus1 wavelet.
+        # Wavelet length is bounded by signal length so np.convolve
+        # in 'same' mode returns exactly len(data) samples.
+        L = max(int(10 * s), 16)
+        if L % 2 == 0:
+            L += 1
+        if L > n:
+            L = n if n % 2 == 1 else n - 1
+        if L < 3:
+            out[i] = 0.0
+            continue
+        t = (np.arange(L) - L // 2) / s
+        psi = -2.0 * t * np.exp(-t * t)
+        # Scale normalization 1/sqrt(s) preserves L2 energy. Convolve
+        # with psi[::-1] (correlation form, matching pywt's sign).
+        out[i] = np.convolve(data, psi[::-1], mode="same") / np.sqrt(s)
+    return out
+
+
+__all__ = [
+    "butter", "lfilter", "lfilter_zi", "filtfilt", "find_peaks",
+    "lfilter_backend",
+    "wavedec", "waverec", "cwt",
+]
