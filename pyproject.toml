@@ -1,6 +1,6 @@
 [project]
 name = "openecg"
-version = "0.2.0"
+version = "0.3.0"
 description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,20 +34,42 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
+# Core (`openecg.detect_qrs`, `openecg.detect_pace`) is **numpy-only**.
+# All heavier dependencies live in optional extras — install only what you
+# need. The DSP primitives (Butterworth IIR, filtfilt, find_peaks) are
+# vendored in `openecg.dsp` so the core has no scipy dependency.
 dependencies = [
     "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# PhysioNet dataset loaders (butpdb, ludb, mitdb, ptbxl, qtdb, isp).
+# wfdb reads the WFDB binary format; scipy.signal.{decimate,resample}
+# is used by butpdb's resampling helpers.
+loaders = ["wfdb>=4.1", "scipy>=1.11"]
+
+# Stage-2 neural backbones, datasets, and SSL heads (transformer over
+# discrete ECG tokens, plus HuBERT/ST-MEM/ECG-FM/ECG-Founder loaders).
+stage2 = [
     "scipy>=1.11",
-    "wfdb>=4.1",
     "torch>=2.6",
     "transformers>=4.40",
     "huggingface-hub>=0.20",
 ]
 
-[project.optional-dependencies]
-# Full P/Q/R/S/T delineation via NeuroKit2 (DWT-based). Required only by
-# `openecg.delineate.run`; `openecg.detect_qrs` and `openecg.detect_pace`
-# do not need it.
-delineate = ["neurokit2>=0.2.7"]
+# Full P/Q/R/S/T wave delineation via NeuroKit2 (DWT-based). Required
+# only by `openecg.delineate.run`.
+delineate = ["neurokit2>=0.2.7", "scipy>=1.11"]
+
+# Everything (loaders + stage2 + delineate).
+all = [
+    "wfdb>=4.1",
+    "scipy>=1.11",
+    "torch>=2.6",
+    "transformers>=4.40",
+    "huggingface-hub>=0.20",
+    "neurokit2>=0.2.7",
+]
 
 [project.urls]
 Homepage = "https://github.com/vitaldb/openecg"

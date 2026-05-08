@@ -1,0 +1,101 @@
+"""Unit tests for openecg.dsp — verify our numpy-only DSP matches scipy
+where scipy is available. Tests gracefully skip if scipy isn't installed."""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from openecg.dsp import butter, filtfilt, find_peaks, lfilter
+
+scipy_signal = pytest.importorskip("scipy.signal")
+
+
+# -- butter -------------------------------------------------------------------
+
+@pytest.mark.parametrize("N,Wn,btype", [
+    (2, 0.5 / 250, "high"),
+    (2, [5 / 250, 15 / 250], "band"),
+    (4, 40 / 250, "high"),
+    (4, 0.5 / 180, "high"),
+    (4, [0.5 / 180, 40 / 180], "band"),
+    (3, 0.4, "low"),
+    (5, [0.2, 0.8], "band"),
+])
+def test_butter_matches_scipy(N, Wn, btype):
+    b_ours, a_ours = butter(N, Wn, btype=btype)
+    b_sci, a_sci = scipy_signal.butter(N, Wn, btype=btype)
+    np.testing.assert_allclose(b_ours, b_sci, atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(a_ours, a_sci, atol=1e-12, rtol=1e-10)
+
+
+# -- filtfilt -----------------------------------------------------------------
+
+def test_filtfilt_matches_scipy_bandpass():
+    rng = np.random.default_rng(0)
+    x = rng.normal(0, 1, 2000) + np.sin(2 * np.pi * np.arange(2000) / 50)
+    b, a = butter(2, [5 / 250, 15 / 250], btype="band")
+    y_ours = filtfilt(b, a, x)
+    y_sci = scipy_signal.filtfilt(b, a, x)
+    np.testing.assert_allclose(y_ours, y_sci, atol=1e-9, rtol=1e-7)
+
+
+def test_filtfilt_short_signal():
+    """Signals shorter than padlen — should still run and produce a result
+    of the same length."""
+    x = np.arange(50, dtype=float)
+    b, a = butter(2, 0.5, btype="low")
+    y = filtfilt(b, a, x)
+    assert y.shape == x.shape
+
+
+# -- lfilter ------------------------------------------------------------------
+
+def test_lfilter_matches_scipy():
+    rng = np.random.default_rng(0)
+    x = rng.normal(0, 1, 500)
+    b, a = butter(2, 0.3, btype="low")
+    y_ours = lfilter(b, a, x)
+    y_sci = scipy_signal.lfilter(b, a, x)
+    np.testing.assert_allclose(y_ours, y_sci, atol=1e-12, rtol=1e-10)
+
+
+# -- find_peaks ---------------------------------------------------------------
+
+def test_find_peaks_matches_scipy_height_distance():
+    rng = np.random.default_rng(0)
+    x = np.sin(np.arange(2000) * 0.05) + 0.1 * rng.normal(size=2000)
+    p_ours, _ = find_peaks(x, height=0.3, distance=10)
+    p_sci, _ = scipy_signal.find_peaks(x, height=0.3, distance=10)
+    assert set(p_ours.tolist()) == set(p_sci.tolist())
+
+
+def test_find_peaks_matches_scipy_prominence():
+    rng = np.random.default_rng(1)
+    x = np.cos(np.arange(1000) * 0.03) * np.sin(np.arange(1000) * 0.1)
+    p_ours, props_ours = find_peaks(x, prominence=(None, None))
+    p_sci, props_sci = scipy_signal.find_peaks(x, prominence=(None, None))
+    assert set(p_ours.tolist()) == set(p_sci.tolist())
+    np.testing.assert_allclose(
+        props_ours["prominences"], props_sci["prominences"],
+        atol=1e-12, rtol=1e-10,
+    )
+
+
+def test_find_peaks_with_width_filter():
+    """Width filter is used by openecg.pacer.detect_spikes (legacy detector)."""
+    x = np.zeros(500)
+    # Narrow Gaussian-like peak at sample 100, wide one at sample 300.
+    for i in range(95, 106):
+        x[i] = np.exp(-((i - 100) ** 2) / 4.0)
+    for i in range(280, 321):
+        x[i] = np.exp(-((i - 300) ** 2) / 200.0)
+    p_ours, _ = find_peaks(x, height=0.5, width=(None, 5))
+    p_sci, _ = scipy_signal.find_peaks(x, height=0.5, width=(None, 5))
+    assert set(p_ours.tolist()) == set(p_sci.tolist())
+
+
+def test_find_peaks_empty_input():
+    p, props = find_peaks(np.zeros(0))
+    assert p.size == 0
+    p, props = find_peaks(np.array([1.0]))
+    assert p.size == 0

@@ -15,7 +15,7 @@ replaces the absolute mV floor with a percentile-of-self threshold.
 """
 
 import numpy as np
-from scipy.signal import butter, filtfilt, find_peaks
+from openecg.dsp import butter, filtfilt, find_peaks
 
 
 def detect_spikes(

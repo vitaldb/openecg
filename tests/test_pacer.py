@@ -1,6 +1,5 @@
 # tests/test_pacer.py
 import numpy as np
-from scipy import signal as scipy_signal
 
 from openecg import pacer
 
@@ -27,7 +26,7 @@ def test_detects_negative_polarity_spike():
 def test_ignores_qrs_like_wave():
     # 60ms hann window (R wave morphology) should not trigger
     sig = np.zeros(FS * 5)
-    qrs = scipy_signal.windows.hann(30) * 1.5  # 60ms wide, amp 1.5
+    qrs = np.hanning(30) * 1.5  # 60ms wide, amp 1.5
     sig[1000:1030] = qrs
     detected = pacer.detect_spikes(sig, fs=FS)
     assert len(detected) == 0
@@ -77,7 +76,7 @@ def _signal_with_qrs_and_spike(fs=FS, n_secs=4, noise_mV=0.01, seed=0):
     rng = np.random.default_rng(seed)
     n = fs * n_secs
     sig = rng.normal(0.0, noise_mV, size=n)
-    qrs_w = scipy_signal.windows.hann(int(0.080 * fs))     # 80 ms QRS
+    qrs_w = np.hanning(int(0.080 * fs))     # 80 ms QRS
     qrs_amp = 1.0
     qrs_centers = [int(0.5 * fs), int(1.5 * fs), int(2.5 * fs)]
     for c in qrs_centers:
@@ -231,7 +230,7 @@ def test_is_paced_record_false_on_qrs_only_signal():
     n = FS * 4
     rng = np.random.default_rng(0)
     sig = rng.normal(0, 0.01, size=n)
-    qrs_w = scipy_signal.windows.hann(int(0.080 * FS))
+    qrs_w = np.hanning(int(0.080 * FS))
     qrs_centers = np.array([int(0.5 * FS), int(1.5 * FS), int(2.5 * FS)],
                             dtype=np.int64)
     for c in qrs_centers:

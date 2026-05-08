@@ -12,13 +12,21 @@ the device emits ventricular pacing only. Atrial-only pacing puts the
 spike 100-300 ms before R, so leave ``qrs_indices=None`` (the default)
 to detect those too.
 
-Both detectors use only numpy + scipy — no neurokit2 dependency.
+Both detectors are **pure numpy** — no scipy, wfdb, neurokit2, or torch
+needed for ``detect_qrs`` / ``detect_pace``. The DSP primitives
+(Butterworth IIR design, filtfilt, find_peaks) live in ``openecg.dsp``.
+
+Heavier features live behind optional extras:
+  * ``pip install openecg[loaders]``   — wfdb + scipy (PhysioNet readers)
+  * ``pip install openecg[stage2]``    — torch + transformers + hf-hub
+  * ``pip install openecg[delineate]`` — neurokit2 (full P/Q/R/S/T waves)
+  * ``pip install openecg[all]``       — everything
 
 Lower-level pieces (``pacer_center_surround_score``, the multichannel
 features, the BUT PDB / LUDB / PTB-XL / MIT-BIH loaders, etc.) live in
 their respective modules and are not re-exported here.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from openecg.pacer import detect_pace, is_paced_record
 from openecg.qrs import detect_qrs

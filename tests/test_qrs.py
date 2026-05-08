@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import scipy.signal as scipy_signal
 
 from openecg import detect_qrs
 
@@ -21,7 +20,7 @@ def _synthesize(rr_ms: int = 800, n_beats: int = 8, fs: int = FS,
     # Slow baseline + small noise.
     sig = 0.05 * np.sin(2 * np.pi * 0.3 * t) + rng.normal(0, 0.01, size=n)
     # Hann-shaped QRS pulses ~80 ms wide, amplitude 1.0.
-    qrs_w = scipy_signal.windows.hann(int(0.080 * fs))
+    qrs_w = np.hanning(int(0.080 * fs))
     centers = np.array([int((i + 1) * rr_ms * fs / 1000)
                         for i in range(n_beats)])
     for c in centers:

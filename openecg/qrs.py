@@ -38,7 +38,7 @@ License notice (NeuroKit2 algorithm, MIT-licensed):
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import butter, filtfilt, find_peaks
+from openecg.dsp import butter, filtfilt, find_peaks
 
 
 def _highpass_05(signal: np.ndarray, fs: int) -> np.ndarray:
