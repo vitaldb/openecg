@@ -26,7 +26,7 @@ Lower-level pieces (``pacer_center_surround_score``, the multichannel
 features, the BUT PDB / LUDB / PTB-XL / MIT-BIH loaders, etc.) live in
 their respective modules and are not re-exported here.
 """
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from openecg.pacer import detect_pace, is_paced_record
 from openecg.qrs import detect_qrs

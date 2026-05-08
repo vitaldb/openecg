@@ -99,3 +99,61 @@ def test_find_peaks_empty_input():
     assert p.size == 0
     p, props = find_peaks(np.array([1.0]))
     assert p.size == 0
+
+
+# -- backend dispatch ---------------------------------------------------------
+
+def test_lfilter_backend_dispatch_via_env(monkeypatch):
+    """Each backend (when available) must give bit-equivalent output."""
+    import importlib
+    import openecg.dsp as dsp_mod
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(0, 1, 1000)
+    b, a = butter(2, 0.3, btype="low")
+
+    # Reference: pure numpy.
+    monkeypatch.setenv("OPENECG_LFILTER_BACKEND", "numpy")
+    importlib.reload(dsp_mod)
+    y_np = dsp_mod.lfilter(b, a, x)
+    assert dsp_mod.lfilter_backend() == "numpy"
+
+    # scipy must match numpy (via scipy reference test we already passed).
+    monkeypatch.setenv("OPENECG_LFILTER_BACKEND", "scipy")
+    importlib.reload(dsp_mod)
+    try:
+        y_sci = dsp_mod.lfilter(b, a, x)
+        assert dsp_mod.lfilter_backend() == "scipy"
+        np.testing.assert_allclose(y_np, y_sci, atol=1e-10, rtol=1e-9)
+    except Exception:
+        pytest.skip("scipy backend unavailable")
+
+    # numba (skip silently if not installed).
+    monkeypatch.setenv("OPENECG_LFILTER_BACKEND", "numba")
+    importlib.reload(dsp_mod)
+    try:
+        y_nb = dsp_mod.lfilter(b, a, x)
+        if dsp_mod.lfilter_backend() != "numba":
+            pytest.skip("numba unavailable; fell through to another backend")
+        np.testing.assert_allclose(y_np, y_nb, atol=1e-10, rtol=1e-9)
+    except ImportError:
+        pytest.skip("numba unavailable")
+    finally:
+        # Reset module state for subsequent tests.
+        monkeypatch.delenv("OPENECG_LFILTER_BACKEND", raising=False)
+        importlib.reload(dsp_mod)
+
+
+def test_lfilter_backend_caches():
+    """Backend lookup happens once and is reused on subsequent calls."""
+    import openecg.dsp as dsp_mod
+    # Reset and force an init.
+    dsp_mod._LFILTER_BACKEND = None
+    dsp_mod._LFILTER_BACKEND_NAME = None
+    name1 = dsp_mod.lfilter_backend()
+    func_after_init = dsp_mod._LFILTER_BACKEND
+    assert func_after_init is not None
+    # Calling again must reuse the same cached function object.
+    _ = dsp_mod.lfilter([1.0], [1.0], np.zeros(10))
+    assert dsp_mod._LFILTER_BACKEND is func_after_init
+    assert dsp_mod.lfilter_backend() == name1

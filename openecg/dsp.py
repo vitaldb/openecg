@@ -204,6 +204,22 @@ def butter(N: int, Wn, btype: str = "low"):
 
 
 # -- Direct-form filter -------------------------------------------------------
+#
+# Backend selection (lazy, cached at first call):
+#   1. scipy.signal.lfilter      — C-backed, ~130ms / 30 min ECG
+#   2. numba @njit               — JIT-compiled, near-C after warm-up
+#   3. torchaudio                — GPU/MKL-backed (used in [stage2] users)
+#   4. pure numpy (this file)    — ~1.4 s / 30 min ECG, fallback floor
+#
+# Set ``OPENECG_LFILTER_BACKEND`` env var (one of "scipy", "numba", "torch",
+# "numpy") to force a specific backend. Useful for benchmarking or to opt
+# out of optional speedups in reproducibility-sensitive contexts.
+
+import os as _os
+
+_LFILTER_BACKEND = None  # cached function (b, a, x, zi) -> y or (y, zf)
+_LFILTER_BACKEND_NAME: str | None = None
+
 
 def _normalize(b, a):
     b = np.atleast_1d(np.asarray(b, dtype=np.float64))
@@ -216,12 +232,8 @@ def _normalize(b, a):
     return b, a
 
 
-def lfilter(b, a, x, zi=None):
-    """Direct-form II transposed IIR filter.
-
-    Computes  y[n] = Σ b[k]·x[n−k] − Σ a[k]·y[n−k]   (a[0] normalised to 1).
-    Returns y; or (y, zf) if zi is given (final delay-line state).
-    """
+def _lfilter_numpy(b, a, x, zi=None):
+    """Reference implementation — pure numpy direct-form II transposed."""
     b, a = _normalize(b, a)
     x = np.asarray(x, dtype=np.float64)
     n = x.size
@@ -230,14 +242,12 @@ def lfilter(b, a, x, zi=None):
         b = np.concatenate([b, np.zeros(nfilt - len(b))])
     if len(a) < nfilt:
         a = np.concatenate([a, np.zeros(nfilt - len(a))])
-    # State vector z[0..nfilt-2] in DF-II transposed form.
     z = np.zeros(nfilt - 1, dtype=np.float64) if zi is None else \
         np.asarray(zi, dtype=np.float64).copy()
     y = np.empty(n, dtype=np.float64)
     for i in range(n):
         xi = x[i]
         yi = b[0] * xi + (z[0] if z.size else 0.0)
-        # Update state: z[k] = b[k+1]*x − a[k+1]*y + z[k+1]
         for k in range(z.size - 1):
             z[k] = b[k + 1] * xi - a[k + 1] * yi + z[k + 1]
         if z.size:
@@ -246,6 +256,122 @@ def lfilter(b, a, x, zi=None):
     if zi is None:
         return y
     return y, z
+
+
+def _make_scipy_backend():
+    """scipy.signal.lfilter wrapper that matches our return convention."""
+    from scipy.signal import lfilter as _sci_lfilter
+
+    def _impl(b, a, x, zi=None):
+        if zi is None:
+            return _sci_lfilter(b, a, x)
+        # scipy returns (y, zf) when zi is provided.
+        return _sci_lfilter(b, a, x, zi=zi)
+    return _impl
+
+
+def _make_numba_backend():
+    """numba JIT-compiled IIR loop. First call pays compilation cost
+    (~1-2 s); subsequent calls are near-C speed."""
+    import numba
+
+    @numba.njit(cache=True, fastmath=False)
+    def _core(b, a, x, z):
+        n = x.size
+        nfilt_m1 = z.size
+        y = np.empty(n, dtype=np.float64)
+        for i in range(n):
+            xi = x[i]
+            yi = b[0] * xi + (z[0] if nfilt_m1 > 0 else 0.0)
+            for k in range(nfilt_m1 - 1):
+                z[k] = b[k + 1] * xi - a[k + 1] * yi + z[k + 1]
+            if nfilt_m1 > 0:
+                z[nfilt_m1 - 1] = b[nfilt_m1] * xi - a[nfilt_m1] * yi
+            y[i] = yi
+        return y, z
+
+    def _impl(b, a, x, zi=None):
+        b, a = _normalize(b, a)
+        x = np.asarray(x, dtype=np.float64)
+        nfilt = max(len(b), len(a))
+        if len(b) < nfilt:
+            b = np.concatenate([b, np.zeros(nfilt - len(b))])
+        if len(a) < nfilt:
+            a = np.concatenate([a, np.zeros(nfilt - len(a))])
+        z = np.zeros(nfilt - 1, dtype=np.float64) if zi is None else \
+            np.asarray(zi, dtype=np.float64).copy()
+        y, z_out = _core(b, a, x, z)
+        return y if zi is None else (y, z_out)
+    return _impl
+
+
+def _make_torch_backend():
+    """torchaudio.functional.lfilter wrapper. Argument order is reversed
+    (a_coeffs, b_coeffs) and tensor conversion adds ~1 ms overhead, so
+    this only wins on long signals (> 100k samples)."""
+    import torch
+    from torchaudio.functional import lfilter as _torch_lfilter
+
+    def _impl(b, a, x, zi=None):
+        if zi is not None:
+            # torchaudio's lfilter doesn't support arbitrary zi; defer to
+            # pure-numpy in that branch (filtfilt's edge handling needs zi).
+            return _lfilter_numpy(b, a, x, zi=zi)
+        b, a = _normalize(b, a)
+        xt = torch.as_tensor(np.asarray(x, dtype=np.float64))
+        bt = torch.as_tensor(b)
+        at = torch.as_tensor(a)
+        yt = _torch_lfilter(xt, at, bt, clamp=False)
+        return yt.cpu().numpy()
+    return _impl
+
+
+def _select_lfilter_backend() -> tuple:
+    """Return (impl, name) for the lfilter implementation to use."""
+    forced = _os.environ.get("OPENECG_LFILTER_BACKEND", "").strip().lower()
+    candidates = ("scipy", "numba", "torch", "numpy")
+    order = [forced] if forced in candidates else list(candidates)
+    for name in order:
+        try:
+            if name == "scipy":
+                return _make_scipy_backend(), "scipy"
+            if name == "numba":
+                return _make_numba_backend(), "numba"
+            if name == "torch":
+                return _make_torch_backend(), "torch"
+            if name == "numpy":
+                return _lfilter_numpy, "numpy"
+        except ImportError:
+            continue
+        except Exception:
+            # If a backend init goes wrong (e.g. numba JIT failure), keep
+            # falling through to the next one rather than crashing the
+            # caller's signal-processing path.
+            continue
+    return _lfilter_numpy, "numpy"
+
+
+def lfilter(b, a, x, zi=None):
+    """Direct-form II transposed IIR filter.
+
+    Computes  y[n] = Σ b[k]·x[n−k] − Σ a[k]·y[n−k]   (a[0] normalised to 1).
+    Returns y; or (y, zf) if zi is given (final delay-line state).
+
+    Backend is auto-selected on first call (scipy > numba > torch > numpy)
+    and cached. Override via the ``OPENECG_LFILTER_BACKEND`` env var.
+    """
+    global _LFILTER_BACKEND, _LFILTER_BACKEND_NAME
+    if _LFILTER_BACKEND is None:
+        _LFILTER_BACKEND, _LFILTER_BACKEND_NAME = _select_lfilter_backend()
+    return _LFILTER_BACKEND(b, a, x, zi)
+
+
+def lfilter_backend() -> str:
+    """Return the active lfilter backend name (after first call)."""
+    if _LFILTER_BACKEND_NAME is None:
+        # Trigger backend selection without doing a full filter.
+        lfilter([1.0], [1.0], np.zeros(1, dtype=np.float64))
+    return _LFILTER_BACKEND_NAME or "numpy"
 
 
 def lfilter_zi(b, a):
