@@ -1,6 +1,6 @@
 [project]
 name = "openecg"
-version = "0.1.0"
+version = "0.2.0"
 description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -37,12 +37,17 @@ classifiers = [
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
-    "neurokit2>=0.2.7",
     "wfdb>=4.1",
     "torch>=2.6",
     "transformers>=4.40",
     "huggingface-hub>=0.20",
 ]
+
+[project.optional-dependencies]
+# Full P/Q/R/S/T delineation via NeuroKit2 (DWT-based). Required only by
+# `openecg.delineate.run`; `openecg.detect_qrs` and `openecg.detect_pace`
+# do not need it.
+delineate = ["neurokit2>=0.2.7"]
 
 [project.urls]
 Homepage = "https://github.com/vitaldb/openecg"

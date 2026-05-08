@@ -5,13 +5,28 @@ NK provides per-beat onset/peak/offset for P, QRS, T plus separate Q/S peaks.
 Missing waves are marked with NaN inside NK output; we keep that and let
 labeler handle (via np.isnan checks).
 
+NeuroKit2 is an *optional* dependency — only this module needs it.
+``import openecg`` does NOT pull neurokit2; calling ``openecg.delineate.run``
+without it installed raises a clear ImportError pointing at the extra:
+``pip install openecg[delineate]``.
+
 Spec: docs/superpowers/specs/2026-05-03-ecgcode-stage1-design.md §6
 """
 
 from dataclasses import dataclass
 
-import neurokit2 as nk
 import numpy as np
+
+
+def _require_neurokit():
+    try:
+        import neurokit2 as nk
+    except ImportError as e:
+        raise ImportError(
+            "openecg.delineate.run requires neurokit2. Install it with "
+            "`pip install neurokit2` or `pip install openecg[delineate]`."
+        ) from e
+    return nk
 
 
 @dataclass
@@ -44,7 +59,9 @@ def run(signal: np.ndarray, fs: int = 500, method: str = "dwt") -> DelineateResu
     """Run NK ecg_peaks + ecg_delineate. Returns DelineateResult.
 
     On any NK exception or 0 R peaks detected, returns DelineateResult.empty().
+    Requires neurokit2 (optional dep — pip install openecg[delineate]).
     """
+    nk = _require_neurokit()
     try:
         _, info = nk.ecg_peaks(signal, sampling_rate=fs)
         rpeaks = np.asarray(info["ECG_R_Peaks"], dtype=float)
