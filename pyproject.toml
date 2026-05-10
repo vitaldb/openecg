@@ -1,6 +1,6 @@
 [project]
 name = "openecg"
-version = "0.3.2"
+version = "0.4.0"
 description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,7 +34,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
-# Core (`openecg.detect_qrs`, `openecg.detect_pace`) is **numpy-only**.
+# Core (`openecg.detect_qrs`, `openecg.detect_pacings`) is **numpy-only**.
 # All heavier dependencies live in optional extras — install only what you
 # need. The DSP primitives (Butterworth IIR, filtfilt, find_peaks) are
 # vendored in `openecg.dsp` so the core has no scipy dependency.
