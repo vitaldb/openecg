@@ -1,6 +1,6 @@
 """Numpy-only DSP primitives.
 
-Replaces scipy.signal for openecg's core API (detect_qrs, detect_pace).
+Replaces scipy.signal for openecg's core API (detect_qrs, detect_pacings).
 Implements the textbook DSP algorithms — these are 1970s-vintage and
 have not changed; the only thing that changed in scipy is implementation
 detail. We match scipy's coefficient outputs to within ~1e-12 on the
@@ -445,6 +445,64 @@ def filtfilt(b, a, x, padlen=None):
     if padlen > 0:
         out = out[padlen:-padlen]
     return out
+
+
+def remove_baseline_wander(
+    sig: np.ndarray, fs: float, cutoff_hz: float = 0.5, order: int = 4
+) -> np.ndarray:
+    """Zero-phase Butterworth high-pass to suppress baseline wander.
+
+    cutoff_hz=0.5 Hz preserves P (~5-10 Hz) and T (~1-5 Hz) energy while
+    removing electrode/respiration drift (<0.5 Hz). order=4 + filtfilt =
+    effective 8th-order zero-phase response. Matches AHA ECG monitoring
+    convention. The output has zero DC, so downstream code can skip an
+    explicit mean-subtract / z-score step (rank normalization absorbs
+    any remaining amplitude scale).
+
+    Edge handling: filtfilt's reflect-pad keeps boundary samples free of
+    transient ringing — safe to apply per-window.
+    """
+    nyq = 0.5 * float(fs)
+    b, a = butter(order, cutoff_hz / nyq, btype="high")
+    return filtfilt(b, a, sig)
+
+
+def rank_normalize(
+    sig: np.ndarray, lo: float = -1.0, hi: float = 1.0,
+) -> np.ndarray:
+    """Per-window rank-based normalization (amplitude-invariant).
+
+    Replaces each sample value with its (ties=average) rank within the
+    window, rescaled to ``[lo, hi]`` uniformly. Monotonic-preserving —
+    boundary transitions in the original signal map to rank-level shifts
+    of the same sign — but invariant to the per-window amplitude that
+    breaks z-norm on extreme cases (e.g. R-spikes with z-score > +5 force
+    P/T/baseline to collapse near zero after z-norm).
+
+    Numpy-only implementation: matches ``scipy.stats.rankdata(method=
+    "average")`` bit-for-bit on the no-NaN inputs the ECG pipeline feeds
+    in. Ties get the mean of the ranks they span (so a triple-tied value
+    at sorted positions 5,6,7 all receive rank 6.0).
+
+    Returns float32 of the same shape.
+    """
+    arr = np.asarray(sig, dtype=np.float64)
+    n = arr.size
+    if n == 0:
+        return arr.astype(np.float32)
+    # 1-based average ranks via dense-rank + tie-group endpoints.
+    sorter = np.argsort(arr, kind="stable")
+    inv = np.empty(n, dtype=np.intp)
+    inv[sorter] = np.arange(n)
+    sorted_arr = arr[sorter]
+    obs = np.concatenate([[True], sorted_arr[1:] != sorted_arr[:-1]])
+    dense = obs.cumsum()[inv]                       # 1-based dense rank
+    count = np.concatenate([np.nonzero(obs)[0], [n]])
+    one_based_avg = 0.5 * (count[dense] + count[dense - 1] + 1)
+    # Convert 1..N average ranks to [lo, hi] linear scale.
+    denom = max(n - 1, 1)
+    zero_based = one_based_avg - 1.0
+    return ((zero_based / denom) * (hi - lo) + lo).astype(np.float32)
 
 
 # -- Peak finding -------------------------------------------------------------
