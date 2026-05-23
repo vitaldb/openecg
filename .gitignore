@@ -79,3 +79,8 @@ third_party/
 # Misc
 .claude/
 out/
+
+# Private research / sweeps / kgpu deploys live in a separate nested
+# git repo at research/ → vitaldb/openecg-research (private). Never
+# include in the public package.
+research/
