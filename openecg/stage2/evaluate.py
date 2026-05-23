@@ -55,9 +55,18 @@ def signed_boundary_metrics(
             errors.append(int(pred_arr[best_idx]) - int(true_idx))
 
     n_hits = len(errors)
-    sens = n_hits / len(true_arr) if len(true_arr) > 0 else 0.0
-    ppv = n_hits / len(pred_arr) if len(pred_arr) > 0 else 0.0
-    f1 = 2 * sens * ppv / (sens + ppv) if (sens + ppv) > 0 else 0.0
+    # Empty/empty (e.g. AFib-masked P boundaries on both pred + GT) is "not
+    # applicable" — there is nothing to score. Return NaN so aggregators that
+    # use np.nanmean / np.nanstd skip it. Callers retain the choice to fall
+    # back to 0.0 with `np.nan_to_num` if they want the legacy semantics.
+    if len(true_arr) == 0 and len(pred_arr) == 0:
+        sens = float("nan")
+        ppv = float("nan")
+        f1 = float("nan")
+    else:
+        sens = n_hits / len(true_arr) if len(true_arr) > 0 else 0.0
+        ppv = n_hits / len(pred_arr) if len(pred_arr) > 0 else 0.0
+        f1 = 2 * sens * ppv / (sens + ppv) if (sens + ppv) > 0 else 0.0
     if errors:
         err_ms = np.asarray(errors, dtype=float) * 1000.0 / fs
         mean_signed_ms = float(np.mean(err_ms))

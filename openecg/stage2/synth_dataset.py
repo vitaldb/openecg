@@ -19,14 +19,26 @@ LEAD_NAME_TO_ID = {name: i for i, name in enumerate(ludb.LEADS_12)}
 WINDOW_SAMPLES = 2500
 WINDOW_FRAMES = 500
 SAMPLES_PER_FRAME = WINDOW_SAMPLES // WINDOW_FRAMES   # 5
-N_CLASSES = 4
+N_CLASSES = 5    # v18: 4 legacy + SUPER_PACED_QRS
 
 
-def _labels_to_frame_array(labels: dict[str, list[int]]) -> np.ndarray:
+def _labels_to_frame_array(
+    labels: dict[str, list[int]],
+    *,
+    paced_pattern: bool = False,
+) -> np.ndarray:
     """Convert the synth label dict (sample-level on/off lists) into a
-    frame-level 4-class array via majority-of-5-samples voting.
+    frame-level 5-class array via majority-of-5-samples voting.
+
+    `paced_pattern=True` means this window's QRS-T was generated from the
+    paced-template branch or from "complete" with ventricular escape,
+    i.e. the QRS is wide and the rhythm is dissociated from the atrium.
+    QRS frames in those windows are labelled SUPER_PACED_QRS so the
+    model learns that morphology as a distinct class — sidestepping the
+    paced-FP failure mode of v15-v17.
     """
     sample_labels = np.full(WINDOW_SAMPLES, ee.SUPER_OTHER, dtype=np.uint8)
+    qrs_class = ee.SUPER_PACED_QRS if paced_pattern else ee.SUPER_QRS
     # Order matters: later assignments overwrite earlier ones at overlapping
     # samples. In 3°AVB, P often lands on T or near a QRS; we want the model
     # to learn P even when buried in T amplitude, so P is written LAST and
@@ -35,7 +47,7 @@ def _labels_to_frame_array(labels: dict[str, list[int]]) -> np.ndarray:
     for cls_id, on_key, off_key in (
         (ee.SUPER_T,   "t_on",   "t_off"),
         (ee.SUPER_P,   "p_on",   "p_off"),
-        (ee.SUPER_QRS, "qrs_on", "qrs_off"),
+        (qrs_class,    "qrs_on", "qrs_off"),
     ):
         for on, off in zip(labels.get(on_key, []), labels.get(off_key, [])):
             lo = max(0, int(on))
@@ -87,11 +99,13 @@ class SyntheticAVBDataset(Dataset):
             rng = np.random.default_rng(self.base_seed + idx)
         scenario = self.scenarios[idx % len(self.scenarios)]
         lead = self.leads[(idx // len(self.scenarios)) % len(self.leads)]
-        sig, labels = synth.generate_avb_window(
+        sig, labels, meta = synth.generate_avb_window(
             self.bank, lead, scenario, rng,
             fs=250, duration_s=10.0,
         )
-        frame_labels = _labels_to_frame_array(labels)
+        frame_labels = _labels_to_frame_array(
+            labels, paced_pattern=meta["is_wide_paced_pattern"],
+        )
         lead_id = LEAD_NAME_TO_ID[lead]
         return (
             torch.from_numpy(sig),
@@ -108,10 +122,12 @@ class SyntheticAVBDataset(Dataset):
         for k in range(n_sample):
             scenario = self.scenarios[k % len(self.scenarios)]
             lead = self.leads[(k // len(self.scenarios)) % len(self.leads)]
-            _, labels = synth.generate_avb_window(
+            _, labels, meta = synth.generate_avb_window(
                 self.bank, lead, scenario, rng, fs=250, duration_s=10.0,
             )
-            frames = _labels_to_frame_array(labels)
+            frames = _labels_to_frame_array(
+                labels, paced_pattern=meta["is_wide_paced_pattern"],
+            )
             for c in range(N_CLASSES):
                 counts[c] += int((frames == c).sum())
         # Scale up to the dataset size.

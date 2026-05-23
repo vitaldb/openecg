@@ -117,7 +117,14 @@ def extract_boundaries(frames, fs=250, frame_ms=20):
 
     Returns dict: {p_on, p_off, qrs_on, qrs_off, t_on, t_off} -> list[int sample idx].
     Boundaries reflect the model's raw frame transitions with no shift applied.
+
+    SUPER_PACED_QRS (= 4, v18+) is folded into SUPER_QRS so paced and
+    sinus QRS contribute to the same boundary stream. Callers wanting
+    the paced/non-paced distinction should inspect the frame array
+    directly before calling this.
     """
+    from openecg import eval as _ee
+    frames = _ee.fold_paced_to_qrs(np.asarray(frames, dtype=np.uint8))
     out = {"p_on": [], "p_off": [], "qrs_on": [], "qrs_off": [], "t_on": [], "t_off": []}
     super_to_name = {1: "p", 2: "qrs", 3: "t"}  # SUPER_P, SUPER_QRS, SUPER_T
     spf = int(round(frame_ms * fs / 1000.0))
@@ -153,7 +160,11 @@ def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=20
     """
     if len(frames) == 0:
         return np.asarray(frames, dtype=np.uint8)
-    arr = np.asarray(frames, dtype=np.uint8).copy()
+    # Fold SUPER_PACED_QRS to SUPER_QRS so the legacy postprocessing
+    # (which reasons about per-class min duration / merge gap) treats
+    # paced and sinus QRS uniformly.
+    from openecg import eval as _ee
+    arr = _ee.fold_paced_to_qrs(np.asarray(frames, dtype=np.uint8))
     n = len(arr)
 
     def class_min_frames(cls):
@@ -205,6 +216,115 @@ def post_process_frames(frames, frame_ms=20, min_duration_ms=60, merge_gap_ms=20
     return arr
 
 
+def suppress_p_after_wide_qrs(
+    frames,
+    *,
+    frame_ms: int = 20,
+    qrs_wide_ms: float = 120,
+    refractory_ms: float = 300,
+):
+    """Backwards-compatible alias for `suppress_p_around_wide_qrs` with
+    only post-QRS suppression. Kept so existing callers keep working.
+    """
+    return suppress_p_around_wide_qrs(
+        frames, frame_ms=frame_ms, qrs_wide_ms=qrs_wide_ms,
+        pre_ms=0, post_ms=refractory_ms,
+    )
+
+
+def suppress_p_around_wide_qrs(
+    frames,
+    *,
+    frame_ms: int = 20,
+    qrs_wide_ms: float = 120,
+    pre_ms: float = 300,
+    post_ms: float = 300,
+):
+    """Convert P runs to Other when they fall in the refractory window
+    surrounding a wide QRS.
+
+    Heuristic for paced / BBB / 3°AVB-paced false-positives. A wide QRS
+    (≥ 120 ms) is generally paced or aberrant; the next genuine P arrives
+    at the atrial cycle (≥ 600 ms apart). Two FP modes are common at
+    inference time:
+
+    * **Pre-QRS** — the model fires a "P band" 100-300 ms BEFORE a paced
+      QRS, modelling normal sinus PR coupling. In paced rhythms the
+      ventricle fires independently of atrial activity, so any P that
+      lines up with the paced beat's lead-in is fictitious. (Empirically
+      ~97% of v17's BUT PDB rid=3 paced FPs land in [-300, -100) ms.)
+    * **Post-QRS** — T-wave / late ST of the wide complex mistaken for P
+      in the early refractory phase.
+
+    Both modes are suppressed by this single rule. Setting pre_ms=0
+    disables pre-QRS suppression (legacy behaviour); post_ms=0 disables
+    post-QRS suppression. Normal sinus is unaffected because narrow QRS
+    runs don't trigger the rule, so the standard PR interval P stays.
+
+    Args:
+        frames: per-frame supercategory uint8 array.
+        qrs_wide_ms: minimum QRS duration (ms) to treat as wide.
+        pre_ms:  P runs whose END falls within this window BEFORE a wide
+            QRS-on are suppressed.
+        post_ms: P runs whose START falls within this window AFTER a wide
+            QRS-off are suppressed.
+
+    Returns a new array; `frames` is not modified in place.
+    """
+    arr = np.asarray(frames, dtype=np.uint8).copy()
+    n = len(arr)
+    pre_frames = max(0, int(round(pre_ms / frame_ms)))
+    post_frames = max(0, int(round(post_ms / frame_ms)))
+    qrs_wide_frames = max(1, int(round(qrs_wide_ms / frame_ms)))
+    SUPER_OTHER = 0
+    SUPER_P = 1
+    SUPER_QRS = 2
+
+    # First pass: collect (qrs_on, qrs_off) of all wide-QRS runs.
+    wide_runs: list[tuple[int, int]] = []
+    i = 0
+    while i < n:
+        if arr[i] != SUPER_QRS:
+            i += 1
+            continue
+        j = i
+        while j < n and arr[j] == SUPER_QRS:
+            j += 1
+        if (j - i) >= qrs_wide_frames:
+            wide_runs.append((i, j))
+        i = j
+
+    if not wide_runs:
+        return arr
+
+    # Second pass: walk all P runs, suppress if any wide QRS sits within
+    # the (pre, post) refractory windows.
+    i = 0
+    while i < n:
+        if arr[i] != SUPER_P:
+            i += 1
+            continue
+        ps = i
+        pe = i
+        while pe < n and arr[pe] == SUPER_P:
+            pe += 1
+        # P run is [ps, pe). Check refractory windows.
+        suppressed = False
+        for q_on, q_off in wide_runs:
+            # Pre-QRS: P ends within `pre_frames` before this wide QRS-on.
+            if pre_frames > 0 and ps <= q_on and (q_on - pe) < pre_frames:
+                suppressed = True
+                break
+            # Post-QRS: P starts within `post_frames` after this wide QRS-off.
+            if post_frames > 0 and ps >= q_off and (ps - q_off) < post_frames:
+                suppressed = True
+                break
+        if suppressed:
+            arr[ps:pe] = SUPER_OTHER
+        i = pe
+    return arr
+
+
 REG_CHANNELS = ("p_on", "p_off", "qrs_on", "qrs_off", "t_on", "t_off")
 
 
@@ -213,15 +333,27 @@ def predict_frames_with_reg(model, sig, lead_id, device="cuda"):
     """Single-sequence inference for a (cls, reg, [aux]) tuple-output model.
     Returns (frames[T] uint8, reg_offsets[T, 6] float32).
 
-    Accepts both 2-tuple FrameClassifierViTReg and 3-tuple
-    FrameClassifierViTRegAux outputs (aux is ignored at inference).
+    ``sig`` may be either:
+      * 1-D ndarray of shape [T] — for single-channel models (legacy).
+      * 2-D ndarray of shape [C, T] — for multi-input variants such as
+        ``FrameClassifierViTRegMultiIn`` (signal + pacer + qrs channels).
+    Accepts (cls, reg) or (cls, reg, aux) tuple outputs; aux is ignored.
     """
-    x = torch.from_numpy(sig.astype(np.float32)).unsqueeze(0).to(device)
+    arr = np.asarray(sig, dtype=np.float32)
+    if arr.ndim == 1:
+        x = torch.from_numpy(arr).unsqueeze(0).to(device)        # [1, T]
+    elif arr.ndim == 2:
+        x = torch.from_numpy(arr).unsqueeze(0).to(device)        # [1, C, T]
+    else:
+        raise ValueError(f"sig must be 1-D or 2-D, got shape {arr.shape}")
     lid = torch.tensor([lead_id], dtype=torch.long, device=device)
     out = model(x, lid)
     cls_logits = out[0]
     reg = out[1]
     frames = cls_logits.argmax(dim=-1).cpu().numpy().squeeze(0).astype(np.uint8)
+    # v50d: model returns reg=None when reg_head is removed (NoReg sibling).
+    if reg is None:
+        return frames, None
     reg_np = reg.cpu().numpy().squeeze(0).astype(np.float32)
     return frames, reg_np
 

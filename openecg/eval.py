@@ -7,12 +7,34 @@ import numpy as np
 
 from openecg import vocab
 
-# Supercategory IDs for LUDB-compat 4-class comparison
+# Supercategory IDs.
+# 0..3 are the legacy 4-class scheme (LUDB-compat). The 5th class
+# SUPER_PACED_QRS = 4 was added in v18 to teach the model that "wide
+# QRS without preceding P-coupling" is a distinct morphology from sinus
+# QRS — this targets the BUT PDB rid=3 paced false-positive failure mode
+# of v15-v17. Eval helpers fold the new class back to SUPER_QRS for
+# boundary extraction so existing F1 metrics stay comparable.
 SUPER_OTHER = 0
 SUPER_P = 1
 SUPER_QRS = 2
 SUPER_T = 3
-SUPER_NAMES = {SUPER_OTHER: "other", SUPER_P: "P", SUPER_QRS: "QRS", SUPER_T: "T"}
+SUPER_PACED_QRS = 4
+SUPER_NAMES = {
+    SUPER_OTHER: "other", SUPER_P: "P", SUPER_QRS: "QRS",
+    SUPER_T: "T", SUPER_PACED_QRS: "paced_QRS",
+}
+ALL_SUPER_QRS_CLASSES = (SUPER_QRS, SUPER_PACED_QRS)
+
+
+def fold_paced_to_qrs(frames: np.ndarray) -> np.ndarray:
+    """Map SUPER_PACED_QRS → SUPER_QRS so 5-class outputs are interpretable
+    by the legacy 4-class extract_boundaries / frame_f1 pipeline.
+
+    Returns a copy; the input array is not modified.
+    """
+    out = np.asarray(frames, dtype=np.uint8).copy()
+    out[out == SUPER_PACED_QRS] = SUPER_QRS
+    return out
 
 # Sentinel for masked frames (boundary regions where the model has one-sided
 # context and predictions are unreliable). PyTorch cross_entropy supports

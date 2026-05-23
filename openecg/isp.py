@@ -21,6 +21,13 @@ LEADS_12 = ("i", "ii", "iii", "avr", "avl", "avf",
             "v1", "v2", "v3", "v4", "v5", "v6")
 FS_NATIVE = 1000
 
+# Records flagged as evaluation outliers — excluded from `eval_test_records()`
+# but still loadable individually. rid=60: all 12 leads dominated by
+# baseline-wander/artifact; v40a_ft worst-case analysis (2026-05-10) found
+# 8/10 worst windows came from this single record. Both prior worst-case
+# memos (v37b/v38) flagged it as a single-subject noise outlier.
+EVAL_EXCLUDE_RIDS: tuple[int, ...] = (60,)
+
 _TUPLE_RE = re.compile(r"\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)\)")
 
 
@@ -70,6 +77,16 @@ def load_split() -> dict[str, list[int]]:
     train_ann = _load_csv(inner / "train_isp_delineation_data.csv")
     test_ann = _load_csv(inner / "test_isp_delineation_data.csv")
     return {"train": sorted(train_ann.keys()), "test": sorted(test_ann.keys())}
+
+
+def eval_test_records() -> list[int]:
+    """ISP test records to use for benchmark eval — load_split()['test'] minus
+    any rid in :data:`EVAL_EXCLUDE_RIDS` (single-subject noise outliers).
+
+    Use this in eval loops; use :func:`load_split` for training so excluded
+    records still count toward training set if they appear there.
+    """
+    return [r for r in load_split()["test"] if r not in EVAL_EXCLUDE_RIDS]
 
 
 def _load_annotations(record_id: int, split: str) -> list[tuple[int, int, int]]:

@@ -2,7 +2,7 @@
 
 Source: https://physionet.org/content/ptb-xl/1.0.3/
 
-This loader exists to validate ``openecg.pacer.detect_pace`` on a
+This loader exists to validate ``openecg.pacer.detect_pacings`` on a
 clinical-scale paced-vs-sinus cohort:
 
   * 294 records labelled with SCP-ECG code ``PACE`` (paced rhythm).

@@ -75,7 +75,8 @@ def measure_qrs_widths(
     smooth_ms: float = 8.0,
     physiological_min_ms: float = 40.0,
     default_width_ms: float = 80.0,
-) -> np.ndarray:
+    return_boundaries: bool = False,
+):
     """Estimate per-beat QRS duration (ms) from |∇x| around each R peak.
 
     For each R peak we compute the contiguous interval around the peak
@@ -121,6 +122,14 @@ def measure_qrs_widths(
             When at least one peak measures above the physiological
             floor, the failures are imputed with the in-window median
             of successful measurements instead.
+        return_boundaries: if True, also return per-beat
+            ``(qrs_on_samples, qrs_off_samples)`` arrays alongside the
+            widths. The boundaries come from the same walk-outward
+            ``|∇x|`` threshold logic used to compute the widths, so
+            they are perfectly consistent with the returned width
+            (``qrs_off - qrs_on ≈ width_ms * fs / 1000``). Imputed
+            peaks (those that fail the physiological-floor check) get
+            ``(peak - half_default, peak + half_default)``.
 
     Returns:
         ``np.float64`` array of widths in ms, parallel to ``peaks``.
@@ -131,7 +140,10 @@ def measure_qrs_widths(
     sig = np.asarray(signal, dtype=np.float64)
     peaks_arr = np.asarray(peaks, dtype=np.int64)
     if sig.size == 0 or peaks_arr.size == 0:
-        return np.zeros(peaks_arr.size, dtype=np.float64)
+        out_w = np.zeros(peaks_arr.size, dtype=np.float64)
+        if return_boundaries:
+            return out_w, peaks_arr.astype(np.int64), peaks_arr.astype(np.int64)
+        return out_w
     nan_mask = np.isnan(sig)
     if nan_mask.any():
         idx = np.arange(sig.size)
@@ -152,28 +164,41 @@ def measure_qrs_widths(
     default_samples = max(min_samples, int(round(default_width_ms * fs / 1000.0)))
 
     out = np.zeros(peaks_arr.size, dtype=np.float64)
+    half_default = max(1, int(round(default_width_ms * fs / 2000.0)))
+    if return_boundaries:
+        out_on = np.zeros(peaks_arr.size, dtype=np.int64)
+        out_off = np.zeros(peaks_arr.size, dtype=np.int64)
+
+    def _impute(i, p):
+        out[i] = default_width_ms
+        if return_boundaries:
+            out_on[i] = max(0, int(p) - half_default)
+            out_off[i] = min(len(sig), int(p) + half_default)
+
     for i, p in enumerate(peaks_arr):
         lo_iso = max(0, int(p) - iso_s)
         hi_iso = min(len(grad), int(p) + iso_s)
         if hi_iso - lo_iso < 8:
-            out[i] = default_width_ms
+            _impute(i, p)
             continue
         baseline = float(np.percentile(grad[lo_iso:hi_iso], 25))
         if baseline <= 0:
-            out[i] = default_width_ms
+            _impute(i, p)
             continue
         lo = max(0, int(p) - win_s)
         hi = min(len(grad), int(p) + win_s)
         local = grad[lo:hi]
         peak_rel = int(p) - lo
         if peak_rel < 0 or peak_rel >= len(local):
-            out[i] = default_width_ms
+            _impute(i, p)
             continue
         # Walk with progressively-relaxed threshold until the measured
         # width meets the physiological minimum. Polarity-agnostic via
         # |∇x| — inverted QRS (peak below baseline) has the same gradient
         # signature so the walk works regardless of sign of the peak.
         measured = 0
+        measured_l = peak_rel
+        measured_r = peak_rel
         for mult in multiplier_ladder:
             thr = baseline * mult
             above = local > thr
@@ -188,15 +213,22 @@ def measure_qrs_widths(
             run = r - l
             if run >= min_samples:
                 measured = run
+                measured_l, measured_r = l, r
                 break
             if run > measured:
                 measured = run
+                measured_l, measured_r = l, r
         if measured >= min_samples:
             out[i] = measured * 1000.0 / fs
+            if return_boundaries:
+                out_on[i] = lo + measured_l
+                out_off[i] = lo + measured_r
         else:
             # Even with the most permissive threshold the run is sub-floor.
             # Default to a typical clinical width rather than 0.
-            out[i] = default_width_ms
+            _impute(i, p)
+    if return_boundaries:
+        return out, out_on, out_off
     return out
 
 
@@ -211,6 +243,7 @@ def detect_qrs(
     mindelay_ms: float = 300.0,
     highpass: bool = True,
     return_widths: bool = False,
+    return_boundaries: bool = False,
 ):
     """Detect QRS R-peak sample indices in a 1-D ECG.
 
@@ -234,11 +267,20 @@ def detect_qrs(
         return_widths: if True, also return per-beat QRS widths in ms
             (measured by :func:`measure_qrs_widths` with default
             parameters). Default False keeps the legacy signature.
+        return_boundaries: if True, also return per-beat
+            ``(qrs_on_samples, qrs_off_samples)`` (np.int64 arrays
+            parallel to ``peaks``) from the same gradient-threshold walk
+            ``measure_qrs_widths`` performs. Compose with
+            ``return_widths`` to also get widths.
 
     Returns:
-        Sorted ``np.int64`` array of R-peak sample indices. When
-        ``return_widths=True`` a ``(peaks, widths_ms)`` tuple is returned
-        instead, with parallel arrays.
+        Sorted ``np.int64`` array of R-peak sample indices. With option
+        flags the return becomes one of:
+
+            ``return_widths=True``                  → (peaks, widths_ms)
+            ``return_boundaries=True``              → (peaks, qrs_on, qrs_off)
+            ``return_widths=return_boundaries=True``→ (peaks, widths_ms,
+                                                       qrs_on, qrs_off)
     """
     sig = np.asarray(signal, dtype=np.float64)
     if sig.size == 0:
@@ -323,9 +365,16 @@ def detect_qrs(
             last_peak = peak
 
     peaks = np.asarray(accepted, dtype=np.int64)
-    if not return_widths:
+    if not return_widths and not return_boundaries:
         return peaks
-    widths_ms = measure_qrs_widths(sig, fs, peaks)
+    out = measure_qrs_widths(sig, fs, peaks, return_boundaries=return_boundaries)
+    if return_boundaries and return_widths:
+        widths_ms, qrs_on, qrs_off = out
+        return peaks, widths_ms, qrs_on, qrs_off
+    if return_boundaries:
+        _widths_ms, qrs_on, qrs_off = out
+        return peaks, qrs_on, qrs_off
+    widths_ms = out
     return peaks, widths_ms
 
 

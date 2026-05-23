@@ -183,35 +183,35 @@ def test_4channel_silent_on_pure_noise():
     assert det.size == 0
 
 
-# -- public detect_pace API -------------------------------------------------
+# -- public detect_pacings API ------------------------------------------------
 
-def test_detect_pace_default_4ch_finds_synthetic_spike():
-    """openecg.detect_pace wraps the 4-channel detector by default."""
-    from openecg import detect_pace
+def test_detect_pacings_default_4ch_finds_synthetic_spike():
+    """openecg.detect_pacings wraps the 4-channel detector by default."""
+    from openecg import detect_pacings
     sig, qrs, spike_at = _signal_with_qrs_and_spike()
-    spikes = detect_pace(sig, fs=FS)
+    spikes = detect_pacings(sig, fs=FS)
     assert spikes.size >= 1
     assert (np.abs(spikes - spike_at) <= 2).any()
 
 
-def test_detect_pace_pr_localization_filters():
+def test_detect_pacings_pr_localization_filters():
     """When qrs_indices given, spikes outside [q-pre, q-gap] are dropped."""
-    from openecg import detect_pace
+    from openecg import detect_pacings
     sig, qrs, spike_at = _signal_with_qrs_and_spike()
-    spikes_all = detect_pace(sig, fs=FS)
+    spikes_all = detect_pacings(sig, fs=FS)
     # The synthetic spike sits 50 ms before QRS[1] = inside [-300, -5] ms.
-    spikes_loc = detect_pace(sig, fs=FS, qrs_indices=qrs)
+    spikes_loc = detect_pacings(sig, fs=FS, qrs_indices=qrs)
     assert spikes_loc.size <= spikes_all.size
     assert (np.abs(spikes_loc - spike_at) <= 2).any()
     # If we shrink the PR window so the spike is excluded, no detection.
-    spikes_tight = detect_pace(sig, fs=FS, qrs_indices=qrs, pre_ms=20.0, gap_ms=5.0)
+    spikes_tight = detect_pacings(sig, fs=FS, qrs_indices=qrs, pre_ms=20.0, gap_ms=5.0)
     assert (np.abs(spikes_tight - spike_at) <= 2).sum() == 0
 
 
-def test_detect_pace_1ch_mode_still_works():
-    from openecg import detect_pace
+def test_detect_pacings_1ch_mode_still_works():
+    from openecg import detect_pacings
     sig, qrs, spike_at = _signal_with_qrs_and_spike()
-    spikes = detect_pace(sig, fs=FS, mode="1ch")
+    spikes = detect_pacings(sig, fs=FS, mode="1ch")
     assert spikes.size >= 1
     assert (np.abs(spikes - spike_at) <= 2).any()
 

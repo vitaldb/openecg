@@ -59,6 +59,10 @@ def main():
         ("v12_hubert_ft",   _row(_latest("v12_hubert_ft"), "v12_hubert_ft")),
         ("v12_stmem_lp",    _row(_latest("v12_stmem_lp"), "v12_stmem_lp")),
         ("v12_stmem_ft",    _row(_latest("v12_stmem_ft"), "v12_stmem_ft")),
+        ("v12_ecgfounder_lp", _row(_latest("v12_ecgfounder_lp"), "v12_ecgfounder_lp")),
+        ("v12_ecgfounder_ft", _row(_latest("v12_ecgfounder_ft"), "v12_ecgfounder_ft")),
+        ("v12_ecgfm_lp",    _row(_latest("v12_ecgfm_lp"), "v12_ecgfm_lp")),
+        ("v12_ecgfm_ft",    _row(_latest("v12_ecgfm_ft"), "v12_ecgfm_ft")),
         ("v12_best",        _row(_latest("v12_best"), "v12_best")),
     ]
 

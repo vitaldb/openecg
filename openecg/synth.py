@@ -478,7 +478,7 @@ def generate_avb_window(
     baseline_wander_prob: float = 0.85,
     powerline_hum_prob: float = 0.30,
     motion_artifact_prob: float = 0.20,
-) -> tuple[np.ndarray, dict[str, list[int]]]:
+) -> tuple[np.ndarray, dict[str, list[int]], dict]:
     """Synthesize one (signal, label) example for a chosen AV-block scenario.
 
     Clinically the diagnostic feature of complete AVB is **two regular but
@@ -498,6 +498,13 @@ def generate_avb_window(
     Returns
         signal : float32 np.ndarray, length = fs * duration_s, mean ~0, std ~1
         labels : dict with keys p_on, p_off, qrs_on, qrs_off, t_on, t_off
+        meta   : dict with keys
+                   scenario              : str (echo of input)
+                   is_ventricular_escape : bool (only meaningful for "complete")
+                   is_wide_paced_pattern : bool — True when the QRS-T template
+                       is wide *and* atrial activity is independent of the
+                       ventricle. Caller (e.g. v18 5-class label converter)
+                       uses this to assign SUPER_PACED_QRS to the QRS frames.
     """
     if not bank.p[lead] or not bank.qrst[lead]:
         raise ValueError(f"TemplateBank has no templates for lead {lead}")
@@ -605,4 +612,13 @@ def generate_avb_window(
 
     # z-norm to roughly match the model's input distribution.
     sig = (sig - sig.mean()) / (sig.std() + 1e-6)
-    return sig.astype(np.float32), labels
+    is_wide_paced_pattern = (
+        scenario == "paced"
+        or (scenario == "complete" and is_ventricular_escape)
+    )
+    meta = {
+        "scenario": scenario,
+        "is_ventricular_escape": bool(is_ventricular_escape),
+        "is_wide_paced_pattern": bool(is_wide_paced_pattern),
+    }
+    return sig.astype(np.float32), labels, meta

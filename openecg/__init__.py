@@ -20,7 +20,14 @@ Heavier features live behind optional extras:
   * ``pip install openecg[loaders]``   — wfdb + scipy (PhysioNet readers)
   * ``pip install openecg[stage2]``    — torch + transformers + hf-hub
   * ``pip install openecg[delineate]`` — neurokit2 (full P/Q/R/S/T waves)
+  * ``pip install openecg[deploy]``    — onnxruntime (ONNX boundary detector)
   * ``pip install openecg[all]``       — everything
+
+ONNX boundary detector (v54i) — runs without PyTorch::
+
+    >>> from openecg.deploy import Inference
+    >>> det = Inference("v54i.onnx")
+    >>> windows = det.predict(signal_250hz)     # list of [Boundary] per window
 
 Lower-level pieces (``pacer_center_surround_score``, the multichannel
 features, the BUT PDB / LUDB / PTB-XL / MIT-BIH loaders, etc.) live in
@@ -29,10 +36,13 @@ their respective modules and are not re-exported here.
 __version__ = "0.4.0"
 
 from openecg.afib import afib_score, is_afib
+from openecg.dsp import rank_normalize, remove_baseline_wander
 from openecg.pacer import detect_pacings, is_paced_record
 from openecg.qrs import detect_qrs, measure_qrs_widths
 
 __all__ = [
     "afib_score", "detect_pacings", "detect_qrs", "is_afib",
-    "is_paced_record", "measure_qrs_widths", "__version__",
+    "is_paced_record", "measure_qrs_widths",
+    "rank_normalize", "remove_baseline_wander",
+    "__version__",
 ]

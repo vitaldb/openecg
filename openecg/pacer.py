@@ -655,7 +655,7 @@ def detect_spikes_4channel(
     return peaks.astype(np.int64)
 
 
-def detect_pace(
+def detect_pacings(
     signal: np.ndarray,
     fs: int,
     qrs_indices: np.ndarray | None = None,

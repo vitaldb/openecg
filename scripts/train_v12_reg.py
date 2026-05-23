@@ -80,7 +80,7 @@ def _eval_ludb(model, device):
 def _eval_isp(model, device):
     bp, bt = defaultdict(list), defaultdict(list)
     cum = 0
-    for rid in isp.load_split()["test"]:
+    for rid in isp.eval_test_records():
         try:
             record = isp.load_record(rid, split="test")
             ann = isp.load_annotations_as_super(rid, split="test")

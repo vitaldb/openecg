@@ -15,24 +15,40 @@ Pathology coverage (per the original README):
   BIII (3rd-degree AV block):  record 3
   AFIB, AFL, V, R, L, J, NOD, ...  see README for full list.
 
-Set OPENECG_BUTPDB_ZIP to the dataset zip path. Cache extracts to
-OPENECG_BUTPDB_CACHE (default: ~/.cache/openecg/butpdb).
+Zip discovery order:
+  1. OPENECG_BUTPDB_ZIP env (explicit path).
+  2. <OPENECG_DATASETS_DIR or G:/Shared drives/datasets/ecg>/but-pdb-1.0.0.zip
+  3. Download from PhysioNet, cached into the dataset folder above.
+
+Cache extracts to OPENECG_BUTPDB_CACHE (default: ~/.cache/openecg/butpdb).
 """
 
 from __future__ import annotations
 
 import os
 import re
+import urllib.request
 import zipfile
 from pathlib import Path
 
 import numpy as np
+import scipy.signal as scipy_signal
 import wfdb
 
 INNER_DIR = (
     "brno-university-of-technology-ecg-signal-database-with-annotations-"
     "of-p-wave-but-pdb-1.0.0"
 )
+
+ZIP_FILENAME = "but-pdb-1.0.0.zip"
+
+PHYSIONET_URL = (
+    "https://physionet.org/static/published-projects/but-pdb/"
+    "brno-university-of-technology-ecg-signal-database-with-annotations-"
+    "of-p-wave-but-pdb-1.0.0.zip"
+)
+
+DEFAULT_DATASETS_DIR = Path(r"G:\Shared drives\datasets\ecg")
 
 # Pathology -> list of record IDs (parsed from README; canonical map for the
 # AV-block cohort that motivates loading this dataset).
@@ -47,14 +63,33 @@ AVB_RECORDS: tuple[int, ...] = tuple(
 )
 
 
+def _datasets_dir() -> Path:
+    p = os.environ.get("OPENECG_DATASETS_DIR")
+    return Path(p).expanduser() if p else DEFAULT_DATASETS_DIR
+
+
+def _download_zip(target: Path) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".part")
+    print(f"[butpdb] downloading {PHYSIONET_URL} -> {target}")
+    urllib.request.urlretrieve(PHYSIONET_URL, tmp)
+    tmp.replace(target)
+    return target
+
+
 def _zip_path() -> Path:
-    p = os.environ.get("OPENECG_BUTPDB_ZIP")
-    if not p:
-        raise FileNotFoundError(
-            "Set OPENECG_BUTPDB_ZIP env var to BUT PDB zip path "
-            "(download: https://physionet.org/content/but-pdb/1.0.0/)"
-        )
-    return Path(p)
+    """Locate the BUT PDB zip.
+
+    Order: OPENECG_BUTPDB_ZIP env -> <datasets_dir>/but-pdb-1.0.0.zip ->
+    download from PhysioNet into <datasets_dir>.
+    """
+    env = os.environ.get("OPENECG_BUTPDB_ZIP")
+    if env:
+        return Path(env)
+    candidate = _datasets_dir() / ZIP_FILENAME
+    if candidate.exists():
+        return candidate
+    return _download_zip(candidate)
 
 
 def _cache_path() -> Path:
@@ -121,6 +156,54 @@ def load_qrs(record_id: int) -> dict[str, np.ndarray]:
     return {
         "sample": np.asarray(ann.sample, dtype=np.int64),
         "symbol": list(ann.symbol),
+    }
+
+
+def load_record_at_fs(record_id: int, fs: int = 360) -> dict:
+    """Load a BUT PDB record resampled to `fs` (default 360 Hz — native for
+    records 1-38, including the AVB cohort) along with P-peak and QRS
+    annotations rescaled to the same rate.
+
+    Returns:
+        signal:      (n_samples, 2) float32 — resampled to `fs`.
+        fs:          int = `fs`.
+        leads:       list[str] from the WFDB header.
+        p_peaks:     int64[N] — P-wave peak sample indices at `fs`.
+        qrs_peaks:   int64[M] — QRS sample indices at `fs`.
+        qrs_symbols: list[str].
+
+    Records 1-38 have native fs=360 (no resampling at default fs). Records
+    39-50 have native fs=128; at fs=360 these are upsampled via
+    scipy.signal.resample (non-integer ratio).
+    """
+    rec = load_record(record_id)
+    fs_native = rec["fs"]
+    sig_full = rec["signal"]
+    if fs_native == fs:
+        sig_target = sig_full
+    elif fs_native % fs == 0:
+        factor = fs_native // fs
+        sig_target = np.stack(
+            [scipy_signal.decimate(sig_full[:, c], factor, zero_phase=True)
+             for c in range(sig_full.shape[1])],
+            axis=-1,
+        )
+    else:
+        n_new = int(round(sig_full.shape[0] * fs / fs_native))
+        sig_target = np.stack(
+            [scipy_signal.resample(sig_full[:, c], n_new)
+             for c in range(sig_full.shape[1])],
+            axis=-1,
+        )
+    scale = sig_target.shape[0] / sig_full.shape[0]
+    qrs_data = load_qrs(record_id)
+    return {
+        "fs": fs,
+        "leads": rec["leads"],
+        "signal": sig_target.astype(np.float32),
+        "p_peaks": (load_pwave_peaks(record_id) * scale).astype(np.int64),
+        "qrs_peaks": (qrs_data["sample"] * scale).astype(np.int64),
+        "qrs_symbols": qrs_data["symbol"],
     }
 
 
