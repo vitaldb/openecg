@@ -50,6 +50,7 @@ data/*
 !data/splits/
 !data/splits/*.json
 datasets/
+physionet.org/
 
 # Model checkpoints
 *.pt
