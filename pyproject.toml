@@ -103,6 +103,16 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Include the model binaries even though they are git-ignored (they're
+# force-added to the repo). Needed so both sdist and wheel carry them.
+[tool.hatch.build]
+artifacts = [
+    "openecg/models/*.tflite",
+    "openecg/models/*.pt",
+    "openecg/models/*.onnx",
+    "openecg/models/*MODEL_CARD.md",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["openecg"]
 
