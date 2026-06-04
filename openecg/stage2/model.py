@@ -1097,6 +1097,10 @@ def _register_variant_arches():
         FrameClassifierTransformerDualAuxNoReg2Ch,
         FrameClassifierTransformerNoAux2Ch,
         FrameClassifierTransformerNoAux1Ch,
+        FrameClassifierTransformerLayered1Ch,
+        FrameClassifierTransformerSampleRes1Ch,
+        FrameClassifierTransformerSampleResConvTok1Ch,
+        FrameClassifierTransformerSampleResConvTokMH1Ch,
         FrameClassifierTransformerNoAux2ChBoxIn,
         FrameClassifierTransformerNoAux2ChRankEmb,
         FrameClassifierCnnOnly2Ch,
@@ -1105,6 +1109,10 @@ def _register_variant_arches():
     _ARCH_REGISTRY["vit_transformer_dualaux_noreg_2ch"]    = FrameClassifierTransformerDualAuxNoReg2Ch
     _ARCH_REGISTRY["vit_transformer_noaux_2ch"]            = FrameClassifierTransformerNoAux2Ch
     _ARCH_REGISTRY["vit_transformer_noaux_1ch"]            = FrameClassifierTransformerNoAux1Ch
+    _ARCH_REGISTRY["vit_transformer_layered_1ch"]          = FrameClassifierTransformerLayered1Ch
+    _ARCH_REGISTRY["vit_transformer_sample_res_1ch"]       = FrameClassifierTransformerSampleRes1Ch
+    _ARCH_REGISTRY["vit_transformer_sample_res_convtok_1ch"] = FrameClassifierTransformerSampleResConvTok1Ch
+    _ARCH_REGISTRY["vit_transformer_sample_res_convtok_mh_1ch"] = FrameClassifierTransformerSampleResConvTokMH1Ch
     _ARCH_REGISTRY["vit_transformer_noaux_2ch_boxin"]      = FrameClassifierTransformerNoAux2ChBoxIn
     _ARCH_REGISTRY["vit_transformer_noaux_2ch_rankembed"]  = FrameClassifierTransformerNoAux2ChRankEmb
     _ARCH_REGISTRY["vit_cnn_only_2ch"]                     = FrameClassifierCnnOnly2Ch
@@ -1158,11 +1166,25 @@ def load_model_from_ckpt(ckpt_path, device: str = "cpu") -> tuple[nn.Module, dic
     # `aux_target` is metadata on the noaux 2-ch variants too (drop before ctor).
     if arch in ("vit_transformer_noaux_2ch",
                  "vit_transformer_noaux_1ch",
+                 "vit_transformer_layered_1ch",
+                 "vit_transformer_sample_res_1ch",
+                 "vit_transformer_sample_res_convtok_1ch",
+                 "vit_transformer_sample_res_convtok_mh_1ch",
                  "vit_transformer_noaux_2ch_boxin",
                  "vit_transformer_noaux_2ch_rankembed",
                  "vit_cnn_only_2ch"):
         cfg.pop("aux_target", None)
         cfg.pop("use_aux", None)
+    if arch in ("vit_transformer_sample_res_1ch",
+                 "vit_transformer_sample_res_convtok_1ch",
+                 "vit_transformer_sample_res_convtok_mh_1ch"):
+        # Metadata-only fields on the sample-res variants; not ctor kwargs.
+        cfg.pop("use_reg", None)
+        cfg.pop("n_reg", None)
+        cfg.pop("sample_res_frame", None)
+        cfg.pop("tokenizer", None)
+        cfg.pop("beat_n_classes", None)
+        cfg.pop("rhythm_n_classes", None)
     # n_input_channels is metadata-only on hybrid archs (input shape derived).
     cfg.pop("n_input_channels", None)
     model = cls(**cfg)

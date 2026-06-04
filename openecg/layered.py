@@ -1,0 +1,539 @@
+"""Layered ECG codec — sample-resolution multi-layer label channels.
+
+Stacks N parallel label tracks at the input signal's sample rate. Each
+layer encodes wave/beat/rhythm information at a different abstraction;
+segment start/end is naturally represented by class transitions, and an
+event-list view is provided for textual rendering and LLM ingestion.
+
+Layers (low -> high abstraction):
+
+  0 frame   wave class per sample: other / P / QRS / T / paced_QRS
+            (output of the boundary delineator, nearest-neighbor
+            upsampled from 50 Hz frames to the input fs).
+  1 beat    beat type per sample, active inside QRS spans only:
+            none / sinus / vpc / paced / fusion / unknown.  Outside
+            QRS the value is ``BEAT_NONE``.
+  2 rhythm  rhythm class per sample: sinus / avb / paced / afib / bbb
+            / ventricular.  Currently window-constant — one label fills
+            all samples.  Sub-window rhythm segmentation is a follow-up.
+
+Sample resolution preserves on/off precision and makes channels
+trivially zip-able with the raw signal for plotting and downstream
+sequence models.  v0 covers a single 10-s window @ 250 Hz; multi-window
+sliding is a thin loop on top.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+import numpy as np
+
+from openecg.eval import (
+    SUPER_OTHER, SUPER_P, SUPER_QRS, SUPER_T, SUPER_PACED_QRS,
+    SUPER_NAMES, ALL_SUPER_QRS_CLASSES,
+)
+
+LAYER_NAMES: tuple[str, ...] = ("frame", "beat", "rhythm")
+N_LAYERS = len(LAYER_NAMES)
+
+# --- Continuous-use codec: 2-s edge guard --------------------------------
+# Predictions in the outer ``EVAL_MARGIN_S`` seconds of any window have
+# limited past/future context. Held-out evaluation, codec-string export,
+# and stream stitching exclude these samples so adjacent windows can be
+# concatenated seamlessly.  See the README "Continuous-use codec" section.
+EVAL_MARGIN_S: float = 2.0
+DEFAULT_WINDOW_S: float = 10.0
+
+# ---- Layer 1: beat type --------------------------------------------------
+BEAT_NONE    = 0
+BEAT_SINUS   = 1
+BEAT_VPC     = 2
+BEAT_PACED   = 3
+BEAT_FUSION  = 4
+BEAT_UNKNOWN = 5
+BEAT_NAMES = {
+    BEAT_NONE: "none", BEAT_SINUS: "sinus", BEAT_VPC: "vpc",
+    BEAT_PACED: "paced", BEAT_FUSION: "fusion", BEAT_UNKNOWN: "unknown",
+}
+
+# ---- Layer 2: rhythm (indices match openecg.rhythm.CLASS_NAMES) ----------
+RHYTHM_SINUS, RHYTHM_AVB, RHYTHM_PACED, RHYTHM_AFIB, RHYTHM_BBB, RHYTHM_VENT = range(6)
+RHYTHM_NAMES = {
+    RHYTHM_SINUS: "sinus", RHYTHM_AVB: "avb", RHYTHM_PACED: "paced",
+    RHYTHM_AFIB: "afib", RHYTHM_BBB: "bbb", RHYTHM_VENT: "ventricular",
+}
+
+CLASS_NAMES_BY_LAYER = {
+    "frame":  SUPER_NAMES,
+    "beat":   BEAT_NAMES,
+    "rhythm": RHYTHM_NAMES,
+}
+
+_DEFAULT_RENDER_CHARS = {
+    "frame":  {SUPER_OTHER: "-", SUPER_P: "p", SUPER_QRS: "Q",
+               SUPER_T: "t", SUPER_PACED_QRS: "P"},
+    "beat":   {BEAT_NONE: "-", BEAT_SINUS: "s", BEAT_VPC: "v",
+               BEAT_PACED: "p", BEAT_FUSION: "f", BEAT_UNKNOWN: "?"},
+    "rhythm": {RHYTHM_SINUS: "S", RHYTHM_AVB: "A", RHYTHM_PACED: "P",
+               RHYTHM_AFIB: "F", RHYTHM_BBB: "B", RHYTHM_VENT: "V"},
+}
+
+
+@dataclass
+class LayeredCodec:
+    """Output container — ``channels`` is uint8 (N_LAYERS, n_samples).
+
+    The optional ``eval_margin_s`` (default 2.0) marks the front and back
+    seconds of the window as outside the evaluation / emission band.
+    Samples in ``[0, margin]`` and ``[n - margin, n]`` carry less past /
+    future context and are therefore unsafe to emit when concatenating
+    adjacent windows.  Use :attr:`eval_slice` or :attr:`eval_mask` to
+    restrict downstream consumption to the inner band.
+    """
+    fs: int
+    channels: np.ndarray
+    layer_names: tuple[str, ...] = LAYER_NAMES
+    eval_margin_s: float = EVAL_MARGIN_S
+
+    @property
+    def frame(self) -> np.ndarray:  return self.channels[0]
+    @property
+    def beat(self) -> np.ndarray:   return self.channels[1]
+    @property
+    def rhythm(self) -> np.ndarray: return self.channels[2]
+    @property
+    def n_samples(self) -> int:     return int(self.channels.shape[1])
+
+    @property
+    def margin_samples(self) -> int:
+        return int(round(self.eval_margin_s * self.fs))
+
+    @property
+    def eval_slice(self) -> slice:
+        """``slice`` covering the inner [margin, n - margin] band."""
+        m = self.margin_samples
+        return slice(m, max(m, self.n_samples - m))
+
+    @property
+    def eval_mask(self) -> np.ndarray:
+        """``bool[n_samples]`` — True inside the eval band, False in the
+        2-s guards.  Use for masked-loss / masked-metric computation.
+        """
+        m = self.margin_samples
+        mask = np.zeros(self.n_samples, dtype=bool)
+        if self.n_samples > 2 * m:
+            mask[m:self.n_samples - m] = True
+        return mask
+
+    def inner(self) -> "LayeredCodec":
+        """Return a sliced copy clipped to ``eval_slice`` (margin = 0).
+
+        Useful for ``encode_stream`` to concatenate seamless output:
+        ``np.concatenate([w.inner().channels for w in windows], axis=1)``.
+        """
+        sl = self.eval_slice
+        return LayeredCodec(fs=self.fs,
+                             channels=self.channels[:, sl].copy(),
+                             layer_names=self.layer_names,
+                             eval_margin_s=0.0)
+
+    def events(self, layer: str, *, drop_class: int | None = None,
+               eval_only: bool = False
+               ) -> list[tuple[int, int, int]]:
+        """Run-length-encode one layer to (start, end_exclusive, class_id).
+
+        Pass ``drop_class`` to skip segments of that class (e.g.
+        ``BEAT_NONE`` to get only QRS-active beat spans).
+        Pass ``eval_only=True`` to restrict to ``eval_slice`` — samples
+        in the 2-s guards are excluded and segment indices are clipped.
+        """
+        if layer not in LAYER_NAMES:
+            raise ValueError(f"unknown layer {layer!r}")
+        arr = self.channels[LAYER_NAMES.index(layer)]
+        if eval_only:
+            sl = self.eval_slice
+            arr = arr[sl]
+            base = sl.start
+        else:
+            base = 0
+        out: list[tuple[int, int, int]] = []
+        i, n = 0, int(arr.size)
+        while i < n:
+            j = i + 1
+            while j < n and arr[j] == arr[i]:
+                j += 1
+            cls = int(arr[i])
+            if drop_class is None or cls != drop_class:
+                out.append((base + i, base + j, cls))
+            i = j
+        return out
+
+    def to_codec_string(self, *, layer: str = "frame",
+                        chars: dict[int, str] | None = None,
+                        downsample: int = 5,
+                        eval_only: bool = False) -> str:
+        """ASCII rendering of one layer.  Default ``downsample=5`` collapses
+        250 Hz back to the 50 Hz frame-grid for readability.
+
+        Pass ``eval_only=True`` to render only the inner [margin, -margin]
+        band — the form intended for concatenation into a continuous codec
+        string across many windows.
+        """
+        cmap = chars or _DEFAULT_RENDER_CHARS[layer]
+        arr = self.channels[LAYER_NAMES.index(layer)]
+        if eval_only:
+            arr = arr[self.eval_slice]
+        arr = arr[::max(1, downsample)]
+        return "".join(cmap.get(int(c), "?") for c in arr)
+
+
+# ---- Default predictor adapters -----------------------------------------
+
+def _default_frame_predictor(signal: np.ndarray, fs: int, lead_id: int
+                             ) -> np.ndarray:
+    """Bundled TFLite delineator -> (n_frames,) uint8."""
+    from openecg.deploy import Inference  # local import: tflite optional
+    if not hasattr(_default_frame_predictor, "_inf"):
+        _default_frame_predictor._inf = Inference()  # type: ignore[attr-defined]
+    logits = _default_frame_predictor._inf.forward_window(signal)  # type: ignore[attr-defined]
+    return np.argmax(logits, axis=-1).astype(np.uint8)
+
+
+def _default_rhythm_predictor(signal: np.ndarray, fs: int) -> int:
+    """Bundled 6-class rhythm router -> rhythm_id (int)."""
+    from openecg.rhythm import classify, CLASS_NAMES, WINDOW_SAMPLES
+    if fs != 250 or signal.size != WINDOW_SAMPLES:
+        raise ValueError(
+            f"default rhythm predictor needs 10 s @ 250 Hz "
+            f"({WINDOW_SAMPLES} samples); got fs={fs}, len={signal.size}"
+        )
+    label, _ = classify(signal)
+    return CLASS_NAMES.index(label)
+
+
+def _default_beat_classifier(signal: np.ndarray,
+                             qrs_spans: list[tuple[int, int]],
+                             frames: np.ndarray, frame_ms: int, fs: int,
+                             rhythm_id: int) -> list[int]:
+    """Rule-stub: derive beat type from frame class + rhythm context.
+
+    A dedicated per-beat morphology classifier will replace this; until
+    then:
+      * paced_QRS frame in span      -> BEAT_PACED
+      * rhythm == ventricular        -> BEAT_VPC
+      * rhythm in {sinus, avb}       -> BEAT_SINUS  (P-axis rhythms)
+      * otherwise                    -> BEAT_UNKNOWN
+    """
+    spf = max(1, int(round(frame_ms * fs / 1000.0)))
+    out: list[int] = []
+    for s, e in qrs_spans:
+        f_lo = s // spf
+        f_hi = max(f_lo + 1, e // spf)
+        seg = frames[f_lo:f_hi]
+        if seg.size and (seg == SUPER_PACED_QRS).any():
+            out.append(BEAT_PACED)
+        elif rhythm_id == RHYTHM_VENT:
+            out.append(BEAT_VPC)
+        elif rhythm_id in (RHYTHM_SINUS, RHYTHM_AVB):
+            out.append(BEAT_SINUS)
+        else:
+            out.append(BEAT_UNKNOWN)
+    return out
+
+
+# ---- Public encoder -----------------------------------------------------
+
+_CODEC_CACHE: dict = {}
+
+
+def load_codec(ckpt: str | None = None, device: str = "cpu"):
+    """Load the bundled layered-codec model (frame/beat/rhythm) for use as the
+    ``model=`` argument to :func:`encode`.
+
+    Defaults to the packaged ``codec_v1.pt`` (pure-real, sample-resolution
+    multi-head, 500 Hz). Requires torch. The result is cached per (ckpt, device).
+
+        >>> import openecg
+        >>> m = openecg.load_codec()
+        >>> codec = openecg.encode(signal_500hz, fs=500, model=m)
+    """
+    from pathlib import Path as _Path
+    if ckpt is None:
+        ckpt = str(_Path(__file__).with_name("models") / "codec_v1.pt")
+    key = (ckpt, device)
+    if key in _CODEC_CACHE:
+        return _CODEC_CACHE[key]
+    from openecg.stage2.model import load_model_from_ckpt
+    model, _ = load_model_from_ckpt(ckpt, device=device)
+    model.eval()
+    _CODEC_CACHE[key] = model
+    return model
+
+
+FramePredictor   = Callable[[np.ndarray, int, int], np.ndarray]
+RhythmPredictor  = Callable[[np.ndarray, int], int]
+BeatClassifier   = Callable[[np.ndarray, list, np.ndarray, int, int, int], list]
+
+
+class LayeredPredictor:
+    """Adapter for a multi-head ``FrameClassifierTransformerLayered1Ch``.
+
+    Wraps a model whose forward returns ``(cls, reg, beat, rhythm)`` —
+    all per-patch over ``(B, n_patches, n_classes)`` — and exposes
+    either:
+
+      * :meth:`encode` — return a full :class:`LayeredCodec` from one
+        forward pass (preferred);
+      * three individual callbacks (``frame_predictor`` etc.) compatible
+        with :func:`encode`'s injection points (kept for symmetry).
+
+    Caches the per-patch logits keyed by ``id(signal)`` so the three
+    callback path also runs forward only once per call.
+    """
+
+    def __init__(self, model, *, lead_id: int = 0, device: str = "cpu",
+                 frame_ms: int = 20):
+        self.model = model.eval()
+        self.device = device
+        self.model.to(device)
+        self.lead_id = int(lead_id)
+        self.frame_ms = int(frame_ms)
+        self._cache_key: int | None = None
+        self._cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+
+    def _forward(self, signal: np.ndarray):
+        import torch  # local: keep numpy-only callers torch-free
+        if self._cache_key == id(signal) and self._cache is not None:
+            return self._cache
+        sig = np.asarray(signal, dtype=np.float32).ravel()
+        x = torch.from_numpy(sig).unsqueeze(0).to(self.device)
+        lid = torch.tensor([self.lead_id], dtype=torch.long, device=self.device)
+        with torch.no_grad():
+            out = self.model(x, lid)
+        # 4-tuple (frame, reg, beat, rhythm) = old layered arch;
+        # 3-tuple (frame, beat, rhythm) = sample-res conv-tok multi-head (v59b+).
+        if len(out) == 4:
+            cls, _reg, beat, rhythm = out
+        else:
+            cls, beat, rhythm = out
+        f = cls[0].argmax(-1).cpu().numpy().astype(np.uint8)
+        b = beat[0].argmax(-1).cpu().numpy().astype(np.uint8)
+        r = rhythm[0].argmax(-1).cpu().numpy().astype(np.uint8)
+        self._cache_key, self._cache = id(signal), (f, b, r)
+        return self._cache
+
+    def encode(self, signal: np.ndarray, fs: int = 250) -> LayeredCodec:
+        sig = np.asarray(signal, dtype=np.float32).ravel()
+        n = int(sig.size)
+        f_patches, b_patches, r_patches = self._forward(sig)
+        spf = max(1, int(round(self.frame_ms * fs / 1000.0)))
+
+        def _upsample(arr_50hz: np.ndarray, fill: int) -> np.ndarray:
+            # Sample-resolution heads (v59b+) already emit one label per input
+            # sample — no patch upsampling needed.
+            if arr_50hz.size == n:
+                return arr_50hz.astype(np.uint8)
+            up = np.repeat(arr_50hz, spf)[:n]
+            if up.size < n:
+                up = np.concatenate(
+                    [up, np.full(n - up.size, fill, dtype=np.uint8)])
+            return up
+
+        layer_frame  = _upsample(f_patches, SUPER_OTHER)
+        layer_rhythm = _upsample(r_patches, RHYTHM_SINUS)
+        beat_full    = _upsample(b_patches, BEAT_NONE)
+        # Beat layer is QRS-gated: zero outside QRS frames so downstream
+        # callers see BEAT_NONE in non-QRS regions regardless of what the
+        # head emitted there.
+        qrs_mask = np.isin(layer_frame, ALL_SUPER_QRS_CLASSES)
+        layer_beat = np.where(qrs_mask, beat_full, BEAT_NONE).astype(np.uint8)
+
+        channels = np.stack([layer_frame, layer_beat, layer_rhythm], axis=0)
+        return LayeredCodec(fs=fs, channels=channels)
+
+    # ---- Injection-point callbacks (compose with `encode()` if mixing) --
+
+    def frame_predictor(self, signal: np.ndarray, fs: int, lead_id: int
+                        ) -> np.ndarray:
+        return self._forward(signal)[0]
+
+    def rhythm_predictor(self, signal: np.ndarray, fs: int) -> int:
+        r = self._forward(signal)[2]
+        return int(np.bincount(r, minlength=6).argmax()) if r.size else RHYTHM_SINUS
+
+    def beat_classifier(self, signal: np.ndarray,
+                        qrs_spans: list[tuple[int, int]],
+                        frames: np.ndarray, frame_ms: int, fs: int,
+                        rhythm_id: int) -> list[int]:
+        b = self._forward(signal)[1]
+        spf = max(1, int(round(frame_ms * fs / 1000.0)))
+        out: list[int] = []
+        for s, e in qrs_spans:
+            f_lo, f_hi = s // spf, max(s // spf + 1, e // spf)
+            seg = b[f_lo:f_hi]
+            out.append(int(np.bincount(seg, minlength=6).argmax())
+                       if seg.size else BEAT_UNKNOWN)
+        return out
+
+
+def encode(
+    signal: np.ndarray,
+    fs: int = 250,
+    *,
+    model=None,
+    frame_predictor: Optional[FramePredictor] = None,
+    rhythm_predictor: Optional[RhythmPredictor] = None,
+    beat_classifier: Optional[BeatClassifier] = None,
+    lead_id: int = 0,
+    frame_ms: int = 20,
+    eval_margin_s: float = EVAL_MARGIN_S,
+) -> LayeredCodec:
+    """Encode one ECG window into the layered codec.
+
+    Parameters
+    ----------
+    signal : 1-D float array at ``fs`` Hz.
+    fs : sample rate of ``signal``.  Channels are returned at this rate.
+    model : optional multi-head ``FrameClassifierTransformerLayered1Ch``
+        instance.  When given, a :class:`LayeredPredictor` is built once
+        and used to fill *all three* layers from one forward pass — the
+        ``frame_predictor`` / ``rhythm_predictor`` / ``beat_classifier``
+        kwargs are ignored in this path.  This is the v57+ deploy path.
+    frame_predictor : ``(signal, fs, lead_id) -> uint8 frames`` at
+        ``frame_ms`` resolution with values in ``SUPER_*``.  Defaults to
+        the bundled TFLite delineator.
+    rhythm_predictor : ``(signal, fs) -> rhythm_id`` (0..5).  Defaults to
+        ``openecg.rhythm.classify``.
+    beat_classifier : ``(signal, qrs_spans, frames, frame_ms, fs,
+        rhythm_id) -> list[beat_id]`` of length ``len(qrs_spans)``.
+        Defaults to the rule-stub above.
+
+    Returns
+    -------
+    LayeredCodec with ``channels`` shape ``(N_LAYERS, len(signal))``.
+    """
+    if model is not None:
+        c = LayeredPredictor(model, lead_id=lead_id, frame_ms=frame_ms
+                             ).encode(signal, fs=fs)
+        c.eval_margin_s = float(eval_margin_s)
+        return c
+    sig = np.asarray(signal, dtype=np.float32).ravel()
+    n = int(sig.size)
+    spf = max(1, int(round(frame_ms * fs / 1000.0)))
+
+    # Layer 0: frame (predict at 50 Hz, upsample by nearest-neighbor).
+    fp = frame_predictor or _default_frame_predictor
+    frames = np.asarray(fp(sig, fs, lead_id), dtype=np.uint8)
+    layer_frame = np.repeat(frames, spf)[:n]
+    if layer_frame.size < n:
+        layer_frame = np.concatenate([
+            layer_frame,
+            np.full(n - layer_frame.size, SUPER_OTHER, dtype=np.uint8),
+        ])
+
+    # Layer 2: rhythm (window-constant for v0).
+    rp = rhythm_predictor or _default_rhythm_predictor
+    rhythm_id = int(rp(sig, fs))
+    layer_rhythm = np.full(n, rhythm_id, dtype=np.uint8)
+
+    # Layer 1: beat (per-QRS, expanded across the span).
+    qrs_mask = np.isin(layer_frame, ALL_SUPER_QRS_CLASSES).astype(np.int8)
+    edges = np.diff(np.concatenate([[0], qrs_mask, [0]]))
+    starts = np.where(edges == 1)[0].tolist()
+    ends   = np.where(edges == -1)[0].tolist()
+    qrs_spans = list(zip(starts, ends))
+    bc = beat_classifier or _default_beat_classifier
+    beat_ids = bc(sig, qrs_spans, frames, frame_ms, fs, rhythm_id)
+    layer_beat = np.full(n, BEAT_NONE, dtype=np.uint8)
+    for (s, e), bid in zip(qrs_spans, beat_ids):
+        layer_beat[s:e] = bid
+
+    channels = np.stack([layer_frame, layer_beat, layer_rhythm], axis=0)
+    return LayeredCodec(fs=fs, channels=channels,
+                         eval_margin_s=float(eval_margin_s))
+
+
+def encode_stream(
+    signal: np.ndarray,
+    fs: int = 250,
+    *,
+    window_s: float = DEFAULT_WINDOW_S,
+    eval_margin_s: float = EVAL_MARGIN_S,
+    **encode_kwargs,
+) -> LayeredCodec:
+    """Slide :func:`encode` over a long signal, emit a seamless codec.
+
+    Adjacent windows overlap by ``2 * eval_margin_s``; each window
+    contributes its *inner* ``[margin, window - margin]`` portion to the
+    output.  Head and tail of the full signal are filled from the first
+    and last windows respectively (no past / future to overlap with).
+
+    For ``window_s=10`` and ``eval_margin_s=2`` the stride is 6 s — every
+    sample is covered by a prediction made with at least 2 s of past
+    *and* 2 s of future context (except the very first and last 2 s of
+    the whole recording, which are unavoidable).
+
+    Returns a :class:`LayeredCodec` covering the full ``len(signal)``
+    samples, with ``eval_margin_s=0`` (the stitched output has no
+    internal guard region; only the absolute head / tail are still
+    context-light).
+    """
+    sig = np.asarray(signal, dtype=np.float32).ravel()
+    fs = int(fs)
+    win_n = int(round(window_s * fs))
+    mar_n = int(round(eval_margin_s * fs))
+    if win_n <= 2 * mar_n:
+        raise ValueError(
+            f"window_s ({window_s}s) must exceed 2 * eval_margin_s "
+            f"({2 * eval_margin_s}s)")
+    inner_n = win_n - 2 * mar_n
+    n = sig.size
+
+    if n <= win_n:                                              # single window
+        return encode(sig, fs=fs, eval_margin_s=eval_margin_s,
+                       **encode_kwargs)
+
+    # Sliding positions so each window's inner band covers a disjoint
+    # contiguous span of the output. Window k spans [k*inner_n, k*inner_n + win_n).
+    pieces: list[np.ndarray] = []
+    k = 0
+    while True:
+        start = k * inner_n
+        end = start + win_n
+        if end >= n:                                            # final window
+            end = n
+            start = max(0, end - win_n)
+            w = np.zeros(win_n, dtype=np.float32)
+            tail = sig[start:end]
+            w[:tail.size] = tail
+            c = encode(w, fs=fs, eval_margin_s=eval_margin_s, **encode_kwargs)
+            # First window: keep [0, win_n - mar_n]; mid: [mar_n, win_n - mar_n];
+            # last: keep [mar_n, win_n] but trim trailing pad.
+            inner_start = 0 if k == 0 else mar_n
+            valid_end = tail.size                               # ignore pad
+            pieces.append(c.channels[:, inner_start:valid_end])
+            break
+        c = encode(sig[start:end], fs=fs, eval_margin_s=eval_margin_s,
+                    **encode_kwargs)
+        inner_start = 0 if k == 0 else mar_n
+        inner_end = win_n - mar_n
+        pieces.append(c.channels[:, inner_start:inner_end])
+        k += 1
+
+    channels = np.concatenate(pieces, axis=1)
+    # In rare cases (window_s coverage rounding) channels may overshoot
+    # the signal length by a sample. Trim to exact length.
+    channels = channels[:, :n]
+    return LayeredCodec(fs=fs, channels=channels, eval_margin_s=0.0)
+
+
+__all__ = [
+    "encode", "encode_stream", "LayeredCodec", "LayeredPredictor",
+    "LAYER_NAMES", "N_LAYERS", "EVAL_MARGIN_S", "DEFAULT_WINDOW_S",
+    "BEAT_NONE", "BEAT_SINUS", "BEAT_VPC", "BEAT_PACED", "BEAT_FUSION",
+    "BEAT_UNKNOWN", "BEAT_NAMES",
+    "RHYTHM_SINUS", "RHYTHM_AVB", "RHYTHM_PACED", "RHYTHM_AFIB",
+    "RHYTHM_BBB", "RHYTHM_VENT", "RHYTHM_NAMES",
+    "CLASS_NAMES_BY_LAYER",
+]

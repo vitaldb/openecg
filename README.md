@@ -80,6 +80,65 @@ print(codec.render_compact(events))               # one char per event
 print(codec.decode(packed) == events)             # round-trip
 ```
 
+### Layered codec — three label streams, one call
+
+```python
+import openecg
+model = openecg.load_codec()                # bundled pure-real codec (frame/beat/rhythm)
+codec = openecg.encode(ecg_500hz, fs=500, model=model)   # 10-s window @ 500 Hz
+codec.channels                              # uint8 (3, 5000) at sample resolution
+codec.frame, codec.beat, codec.rhythm       # per-layer views
+codec.events("beat", drop_class=0)          # [(start, end, class_id), ...]
+codec.to_codec_string(layer="frame")        # ASCII rendering
+```
+
+The bundled codec (`openecg.load_codec()`, 1.16 M params) is trained on
+**pure real, human-expert annotations only** — no synthetic, no pseudo-labels.
+Held-out test: beat sinus F1 0.985 / VPC 0.884, rhythm sinus 0.899 / AFib 0.791.
+`bbb` / `paced` / `avb` rhythm are **experimental** (weak recall) — see the
+[model card](openecg/models/codec_v1_MODEL_CARD.md). Deploy artifacts (ONNX
+fp32 + int8) ship in `openecg/models/`.
+
+The three channels run in parallel at the input signal's sample rate.
+Each layer is a separate label stream at a different abstraction — wave
+boundaries on the bottom, beat type per QRS in the middle, rhythm class
+on top — and segment starts / ends are recoverable from class
+transitions on any single channel.
+
+| Layer | Granularity | Classes | Convention aligned with |
+|---|---|---|---|
+| 0 `frame` | per sample | other / P / QRS / T / paced_QRS | LUDB, QTDB, ISP wave annotation |
+| 1 `beat` | per QRS span | none / sinus / VPC / paced / fusion / unknown | WFDB AAMI EC57 beat codes (N/V/F/`/`/Q) |
+| 2 `rhythm` | per sample (sub-window) | sinus / AVB / paced / AFib / BBB / ventricular | WFDB rhythm aux notes `(N` `(AFIB` `(VT` ... |
+
+VTach, AFib, and similar rhythm-level events sit on layer 2 — they're
+*not* a new frame class, matching MIT-BIH / WFDB convention. See
+`openecg/layered.py` for the predictor-injection points.
+
+### Continuous-use codec — 2-s edge guard
+
+Predictions in the outer **2 seconds** of any 10-s window have limited
+past / future context. Held-out evaluation and stream stitching exclude
+these samples so adjacent windows can be concatenated **seamlessly**:
+
+```python
+codec = openecg.encode(ecg_250hz)            # 10-s window
+codec.eval_mask                               # bool[2500], True only in [2s, 8s]
+codec.events("beat", eval_only=True)         # restricts to the inner band
+inner = codec.inner()                         # sliced copy, margin=0
+
+# Long signal -> sliding inference with stride = window - 2*margin = 6 s.
+# Every emitted sample had ≥2 s of past AND ≥2 s of future context.
+holter_codec = openecg.encode_stream(long_signal_250hz)   # arbitrary length
+```
+
+The same philosophy applies to training and evaluation: loss is computed
+on the full 10-s window (the model needs context to learn), but
+held-out metrics are masked to the inner 6-s band. This is the only way
+to get a codec whose output is **continuously stitchable** without
+boundary artefacts — a prerequisite for any honest foundation-model
+claim.
+
 ## Performance
 
 The shipped model is **v56c** — `vit_transformer_noaux_1ch`, L8/d=128
@@ -173,3 +232,95 @@ minimal:
 pip install "openecg[deploy]"            # end-user inference
 pip install "openecg[loaders,delineate]" # reproduce the benchmark table
 ```
+
+## Toward an ECG foundation model
+
+OpenECG's design treats the three-channel **layered codec** as the
+output interface of a single foundation model:
+
+> Wave → beat → rhythm, all at sample resolution, stitchable across
+> windows, learned jointly from every public corpus that carries the
+> matching label level.
+
+The three pieces required to call this a foundation model are:
+
+1. **A common output schema across datasets.** No dataset is large
+   enough on its own — LUDB has wave labels for 200 records, MIT-BIH
+   Arrhythmia has beat labels for 48 — but each is a partial label of
+   the same codec. Training is multi-task with a per-sample loss mask
+   over the layers each dataset annotates.
+2. **A continuously-stitchable output.** Honest inference on Holter or
+   24-h streams requires that adjacent windows produce a seamless
+   codec. The 2-s edge guard (see above) is the mechanism: training and
+   evaluation only count the inner band, so the model is *rewarded* for
+   producing predictions that are stable when re-evaluated 2 s later
+   with new future context.
+3. **Convention alignment.** Frame layer matches LUDB / QTDB / ISP;
+   beat layer matches WFDB AAMI EC57 codes; rhythm layer matches WFDB
+   aux-note rhythms. A foundation model that invents its own taxonomy
+   is unusable downstream.
+
+### Public datasets, mapped to codec layers
+
+The annotation level dictates which layer's loss is unmasked for each
+record. Datasets carrying both beat *and* rhythm annotations (in **bold**
+below) supervise two layers simultaneously and are the spine of the
+multi-task pool.
+
+| Dataset | Records | Hours | Layer 0 (frame) | Layer 1 (beat) | Layer 2 (rhythm) |
+|---|---:|---:|:---:|:---:|:---:|
+| LUDB                          |    200 |  0.6 | ✓ |   |   |
+| QTDB                          |    105 |  0.9 | ✓ | ✓ |   |
+| ISP                           |    160 |   —  | ✓ |   |   |
+| BUT PDB                       |     50 |  1.7 | ✓ (P-peak) |   | ✓ (AVB) |
+| **MIT-BIH Arrhythmia**        |     48 |   24 |   | ✓ | ✓ |
+| **MIT-BIH SVDB**              |     78 |   39 |   | ✓ | ✓ |
+| **MIT-BIH LTDB**              |      7 |  ~120 |   | ✓ | ✓ |
+| MIT-BIH NSR                   |     18 |  432 |   | ✓ (sinus) |   |
+| MIT-BIH AFDB                  |     25 |  250 |   |   | ✓ (AFib) |
+| **MIT-BIH MVE (VFDB)**        |     22 |   11 |   | ✓ | ✓ (VT/VF) |
+| MIT-BIH Polysomnographic      |     18 |  ~110 |   | ✓ |   |
+| Fantasia                      |     40 |   80 |   | ✓ (sinus) |   |
+| **Sudden Cardiac Death Holter** | 23 |   552 |   | ✓ | ✓ |
+| INCART (12-lead)              |     75 |   37 |   | ✓ |   |
+| European ST-T                 |     90 |  180 |   | ✓ |   |
+| BIDMC CHF                     |     15 |  300 |   | ✓ |   |
+| PTB-XL                        | 21,837 |   61 |   |   | ✓ (SCP, window) |
+| Chapman-Shaoxing 12-lead      | 10,646 |   30 |   |   | ✓ (window) |
+
+**Excluded by design.** CinC 2021 (SNOMED codes aggregated from six
+heterogeneous sources), Icentia 11k (model-predicted pseudo-labels),
+and CODE-15% (AI-derived binary diag flags) are deliberately *not* in
+the foundation pool. The codec layers are defined relative to
+human-expert annotation conventions (cardiologist wave boundaries, AAMI
+beat codes, WFDB rhythm aux-notes); mixing in machine-derived labels
+would erode the very ground truth the codec is supposed to represent.
+These corpora remain useful for downstream external validation but
+not for training the codec heads.
+
+All listed corpora are PhysioNet- or Zenodo-distributed (CC-BY /
+ODC-BY). Loaders for LUDB / QTDB / ISP / BUT PDB / PTB-XL ship in
+`openecg.*`; the remaining ones are pulled in over the standard WFDB
+interface during multi-task training.
+
+The dataset survey above is mirrored in
+[`G:\Shared drives\Datasets\ECG\DATASETS.md`](.) for the SNUH research
+group; the public OpenECG repo will publish a smaller `DATASETS.md`
+restricted to the open corpora once the multi-task model ships.
+
+### Status
+
+| Component | Today | Roadmap (v0.5+) |
+|---|---|---|
+| Layer 0 — frame delineator        | v56c TFLite int8 (bundled, 1.5 MB) | Re-export v56d (AVB-augmented) once `torch.int1` mismatch resolved |
+| Layer 1 — per-beat classifier     | rule-stub (paced / VT-rhythm fallback) | Multi-head v57 trained on MIT-BIH Arrhythmia + SVDB + LTDB + INCART + Fantasia |
+| Layer 2 — rhythm classifier       | 6-class CNN (`openecg.rhythm`), window-constant | Per-patch head from multi-head v57 → sub-window rhythm segmentation |
+| 2-s edge-guarded codec            | `eval_mask` / `eval_only` / `encode_stream` | Used as the gating metric for all v57 training checkpoints |
+| Continuous-stitch inference       | `openecg.encode_stream(signal)` works today | Native multi-window deploy path in TFLite |
+
+The single-pass multi-head architecture lives at
+`openecg.stage2.model_variants.FrameClassifierTransformerLayered1Ch`
+(arch id `vit_transformer_layered_1ch`). It loads from the v56d weight
+file via `strict=False`; the new beat / rhythm heads start zero-init so
+the untrained model emits safe defaults (`BEAT_NONE` / `RHYTHM_SINUS`)
+until per-layer supervision lands.

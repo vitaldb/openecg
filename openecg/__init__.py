@@ -1,5 +1,18 @@
 """openecg — public top-level entry points.
 
+Layered codec — one call, multi-channel label stream at sample
+resolution::
+
+    >>> import openecg
+    >>> codec = openecg.encode(signal_250hz)     # 10-s window @ 250 Hz
+    >>> codec.channels.shape                       # (n_layers, n_samples)
+    (3, 2500)
+    >>> codec.frame, codec.beat, codec.rhythm      # per-layer uint8 views
+    >>> codec.events("beat", drop_class=0)         # [(start, end, class_id), ...]
+
+See :mod:`openecg.layered` for layer definitions, class ids, and
+predictor injection points.
+
 Two single-call detectors are surfaced here:
 
     >>> from openecg import detect_pacings, detect_qrs
@@ -33,16 +46,18 @@ Lower-level pieces (``pacer_center_surround_score``, the multichannel
 features, the BUT PDB / LUDB / PTB-XL / MIT-BIH loaders, etc.) live in
 their respective modules and are not re-exported here.
 """
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from openecg.afib import afib_score, is_afib
 from openecg.dsp import rank_normalize, remove_baseline_wander
+from openecg.layered import LayeredCodec, encode, encode_stream, load_codec
 from openecg.pacer import detect_pacings, is_paced_record
 from openecg.qrs import detect_qrs, measure_qrs_widths
 
 __all__ = [
-    "afib_score", "detect_pacings", "detect_qrs", "is_afib",
-    "is_paced_record", "measure_qrs_widths",
+    "afib_score", "detect_pacings", "detect_qrs",
+    "encode", "encode_stream", "load_codec", "is_afib",
+    "is_paced_record", "LayeredCodec", "measure_qrs_widths",
     "rank_normalize", "remove_baseline_wander",
     "__version__",
 ]
