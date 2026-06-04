@@ -492,6 +492,334 @@ class FrameClassifierTransformerNoAux1Ch(FrameClassifierTransformerNoAux2Ch):
         return sig, qrs_pp
 
 
+class FrameClassifierTransformerLayered1Ch(FrameClassifierTransformerNoAux1Ch):
+    """v57 — single-pass multi-head delineator emitting all three layers
+    of the :mod:`openecg.layered` codec from one forward.
+
+    Heads (all per-patch over ``h_upper`` — output shape ``(B, n_patches,
+    n_classes)`` at the 50 Hz frame grid):
+
+      * ``head``        -> N_FRAME (5)  other/P/QRS/T/paced_QRS    [Layer 0]
+      * ``reg_head``    -> 6           boundary on/off offsets     [reg]
+      * ``beat_head``   -> N_BEAT (6)  none/sinus/vpc/paced/fusion/unknown
+                                                                   [Layer 1]
+      * ``rhythm_head`` -> N_RHYTHM (6) sinus/avb/paced/afib/bbb/ventricular
+                                                                   [Layer 2]
+
+    Forward returns ``(cls, reg, beat, rhythm)`` — slots 2/3 are repurposed
+    relative to the inherited ``(cls, reg, None, None)`` tuple from
+    :class:`FrameClassifierTransformerNoAux1Ch`. The tuple *shape* is kept
+    so legacy ``train_one_epoch_reg`` paths still consume slot 0/1
+    unchanged; new training code should pull beat/rhythm from slots 2/3.
+
+    Init-from-v56d: ``head``, ``reg_head``, backbone weights load via
+    ``load_state_dict(..., strict=False)``. ``beat_head`` and
+    ``rhythm_head`` are zero-initialised so the untrained model's argmax
+    output is ``BEAT_NONE`` / ``RHYTHM_SINUS`` everywhere — encode()
+    callers see "no anomaly" defaults until the new heads are trained.
+
+    Rhythm head is per-patch (not pooled), so sub-window rhythm
+    transitions (e.g. NSR → VT episode mid-window) are representable
+    end-to-end. The window-constant fallback in
+    :mod:`openecg.layered` is preserved for legacy single-label
+    classifiers.
+    """
+
+    def __init__(self, *,
+                 beat_n_classes: int = 6,
+                 rhythm_n_classes: int = 6,
+                 mid_split: int = 4,
+                 lower_kernel: int = 7,
+                 **kwargs):
+        super().__init__(mid_split=mid_split, lower_kernel=lower_kernel, **kwargs)
+        d_model = self.head.in_features
+        self.beat_head   = nn.Linear(d_model, beat_n_classes)
+        self.rhythm_head = nn.Linear(d_model, rhythm_n_classes)
+        # Zero-init the new heads so untrained checkpoints (e.g. when
+        # loaded from v56d via strict=False) emit a safe default
+        # (argmax = 0 = BEAT_NONE / RHYTHM_SINUS) instead of garbage.
+        nn.init.zeros_(self.beat_head.weight)
+        nn.init.zeros_(self.beat_head.bias)
+        nn.init.zeros_(self.rhythm_head.weight)
+        nn.init.zeros_(self.rhythm_head.bias)
+        self.model_config = dict(self.model_config)
+        self.model_config["arch"] = "vit_transformer_layered_1ch"
+        self.model_config["beat_n_classes"] = int(beat_n_classes)
+        self.model_config["rhythm_n_classes"] = int(rhythm_n_classes)
+
+    def forward(self, x, lead_id):
+        sig, _qrs_pp_unused = self._split_signal_qrs(x)
+        B, T = sig.shape
+        n_patches = T // self.patch_size
+        if self.conv_stem:
+            h = torch.nn.functional.gelu(self.stem_conv1(sig.unsqueeze(1)))
+            h = torch.nn.functional.gelu(self.stem_conv2(h))
+            h = h.transpose(1, 2)
+            patches = h.reshape(B, n_patches, self.patch_size * 32)
+        else:
+            patches = sig.view(B, n_patches, self.patch_size)
+        h = self.patch_embed(patches)
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+
+        h_lower = h
+        for conv, norm in zip(self.lower_convs, self.lower_norms):
+            residual = h_lower
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = conv(h_lower)
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = torch.nn.functional.gelu(h_lower)
+            h_lower = norm(h_lower + residual)
+
+        h_upper = self.upper_transformer(h_lower)
+        cls_logits    = self.head(h_upper)
+        reg_offsets   = self.reg_head(h_upper)
+        beat_logits   = self.beat_head(h_upper)
+        rhythm_logits = self.rhythm_head(h_upper)
+        return cls_logits, reg_offsets, beat_logits, rhythm_logits
+
+
+class FrameClassifierTransformerSampleRes1Ch(FrameClassifierTransformerNoAux1Ch):
+    """v57a — frame head emits per-sample logits at the input sample
+    rate (250 Hz, 4 ms granularity) instead of per-patch (50 Hz, 20 ms).
+    ``reg_head`` is dropped: sample-resolution argmax already gives
+    4-ms boundary precision, so sub-frame regression is redundant.
+
+    Purpose: test option A from the layered-codec design discussion —
+    does a per-sample softmax match or beat v56c's per-patch + reg-head
+    on the Martínez boundary F1 / median-timing-error benchmarks?
+
+    Forward returns ``(cls_logits, None, None, None)`` where
+    ``cls_logits`` has shape ``(B, T, n_classes)`` with T equal to the
+    full input sample count.  Slot 1 is None (no reg); slots 2/3 are
+    None (no beat/rhythm heads in this variant; the full multi-head
+    v57 is :class:`FrameClassifierTransformerLayered1Ch`).
+
+    **Bit-equivalent v56c init.** The two-conv refine block is
+    zero-initialised on its output side, so at load time the refine
+    pathway contributes zero and ``cls_logits`` equals
+    ``head_sample(nearest_upsample(h_upper))``.  If ``head_sample`` is
+    seeded from the v56c ``head`` weights via
+    :func:`copy_per_patch_head_to_sample`, the initial output is
+    pointwise identical to v56c's per-patch logits replicated by
+    ``patch_size``.  Training then refines.
+    """
+
+    def __init__(self, *, mid_split: int = 4, lower_kernel: int = 7, **kwargs):
+        super().__init__(mid_split=mid_split, lower_kernel=lower_kernel, **kwargs)
+        d_model = self.head.in_features
+        n_classes = self.head.out_features
+        # Drop the inherited reg head — boundary precision comes from
+        # sample-resolution softmax in this variant.
+        if hasattr(self, "reg_head"):
+            del self.reg_head
+        # Residual refinement at sample resolution. Second conv is
+        # zero-initialised so the refine output is zero at load time.
+        self.refine = nn.Sequential(
+            nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
+            nn.GELU(),
+            nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
+        )
+        nn.init.zeros_(self.refine[-1].weight)
+        nn.init.zeros_(self.refine[-1].bias)
+        # Per-sample classification head (replaces the per-patch
+        # ``head``). Seed by copying ``head`` weights — see
+        # ``copy_per_patch_head_to_sample``.
+        self.head_sample = nn.Linear(d_model, n_classes)
+        with torch.no_grad():
+            self.head_sample.weight.copy_(self.head.weight)
+            self.head_sample.bias.copy_(self.head.bias)
+        self.model_config = dict(self.model_config)
+        self.model_config["arch"] = "vit_transformer_sample_res_1ch"
+        self.model_config["use_reg"] = False
+        self.model_config["n_reg"] = 0
+        self.model_config["sample_res_frame"] = True
+
+    def copy_per_patch_head_to_sample(self) -> None:
+        """Re-seed ``head_sample`` from the per-patch ``head``.  Call
+        this after :func:`load_model_from_ckpt` when initialising from a
+        v56c-style ckpt whose state dict only contains ``head.*``.
+        """
+        with torch.no_grad():
+            self.head_sample.weight.copy_(self.head.weight)
+            self.head_sample.bias.copy_(self.head.bias)
+
+    def forward(self, x, lead_id):
+        sig, _qrs_pp_unused = self._split_signal_qrs(x)
+        B, T = sig.shape
+        n_patches = T // self.patch_size
+        if self.conv_stem:
+            h = torch.nn.functional.gelu(self.stem_conv1(sig.unsqueeze(1)))
+            h = torch.nn.functional.gelu(self.stem_conv2(h))
+            h = h.transpose(1, 2)
+            patches = h.reshape(B, n_patches, self.patch_size * 32)
+        else:
+            patches = sig.view(B, n_patches, self.patch_size)
+        h = self.patch_embed(patches)
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+
+        h_lower = h
+        for conv, norm in zip(self.lower_convs, self.lower_norms):
+            residual = h_lower
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = conv(h_lower)
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = torch.nn.functional.gelu(h_lower)
+            h_lower = norm(h_lower + residual)
+        h_upper = self.upper_transformer(h_lower)        # (B, n_patches, d)
+
+        # Sample-resolution path: nearest upsample + zero-init refine
+        # residual + per-sample head.
+        h_T = h_upper.transpose(1, 2)                    # (B, d, n_patches)
+        h_up = torch.nn.functional.interpolate(
+            h_T, scale_factor=self.patch_size, mode="nearest")
+        h_up = h_up + self.refine(h_up)                  # (B, d, T)
+        h_up = h_up.transpose(1, 2)                      # (B, T, d)
+        cls_logits = self.head_sample(h_up)              # (B, T, n_classes)
+        return cls_logits, None, None, None
+
+
+class FrameClassifierTransformerSampleResConvTok1Ch(
+        FrameClassifierTransformerSampleRes1Ch):
+    """v57d-D2 — sample-resolution head with a **convolutional tokenizer**
+    that replaces the Linear ``patch_embed`` entirely.
+
+    Ablation question: is the learned Linear patch_embed
+    (reshape-to-patches → Linear) necessary, or does a strided Conv1d
+    tokenizer (which keeps local translation structure) work as well or
+    better for a single-lead model?
+
+    Tokenizer: ``Conv1d(1, d_model, kernel_size=2*patch_size,
+    stride=patch_size, padding=patch_size//2)`` maps the raw 500 Hz
+    signal ``(B, T)`` directly to ``(B, n_patches, d_model)`` at the
+    50 Hz grid — no reshape, no Linear patch_embed.  ``patch_embed`` is
+    deleted; everything downstream (lower CNN, upper transformer,
+    sample-resolution upsample + refine + head_sample) is unchanged, so
+    the v56c backbone still transfers (only the tokenizer is new/random).
+
+    Single-lead: ``use_lead_emb`` defaults to False here.
+    """
+
+    def __init__(self, *, mid_split: int = 4, lower_kernel: int = 7,
+                 use_lead_emb: bool = False, **kwargs):
+        super().__init__(mid_split=mid_split, lower_kernel=lower_kernel,
+                         use_lead_emb=use_lead_emb, **kwargs)
+        d_model = self.head.in_features
+        ps = self.patch_size
+        # Strided conv tokenizer: out_len = (T + 2*pad - k)/stride + 1.
+        # k=2*ps, stride=ps, pad=ps//2 -> out_len = T/ps (== n_patches).
+        self.conv_tok = nn.Conv1d(1, d_model, kernel_size=2 * ps,
+                                  stride=ps, padding=ps // 2)
+        if hasattr(self, "patch_embed"):
+            del self.patch_embed
+        if hasattr(self, "stem_conv1"):
+            del self.stem_conv1
+            del self.stem_conv2
+            self.conv_stem = False
+        self.model_config = dict(self.model_config)
+        self.model_config["arch"] = "vit_transformer_sample_res_convtok_1ch"
+        self.model_config["tokenizer"] = "conv"
+
+    def forward(self, x, lead_id):
+        sig, _ = self._split_signal_qrs(x)
+        B, T = sig.shape
+        n_patches = T // self.patch_size
+        # Conv tokenizer -> (B, d_model, n_patches) -> (B, n_patches, d_model)
+        h = self.conv_tok(sig.unsqueeze(1))
+        if h.shape[-1] != n_patches:                       # guard rounding
+            h = h[..., :n_patches]
+        h = h.transpose(1, 2)
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+
+        h_lower = h
+        for conv, norm in zip(self.lower_convs, self.lower_norms):
+            residual = h_lower
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = conv(h_lower)
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = torch.nn.functional.gelu(h_lower)
+            h_lower = norm(h_lower + residual)
+        h_upper = self.upper_transformer(h_lower)
+
+        h_T = h_upper.transpose(1, 2)
+        h_up = torch.nn.functional.interpolate(
+            h_T, scale_factor=self.patch_size, mode="nearest")
+        h_up = h_up + self.refine(h_up)
+        h_up = h_up.transpose(1, 2)
+        cls_logits = self.head_sample(h_up)
+        return cls_logits, None, None, None
+
+
+class FrameClassifierTransformerSampleResConvTokMH1Ch(
+        FrameClassifierTransformerSampleResConvTok1Ch):
+    """v59b — the layered-codec **multi-head** on the E0 backbone:
+    conv-tokenizer + sample-resolution (500 Hz output) + single-lead +
+    NO reg head, with three **per-sample** heads sharing the encoder:
+
+      * ``head_sample``   -> frame  (B, T, n_classes)   [other/P/QRS/T]
+      * ``beat_sample``   -> beat   (B, T, 6)           [none/sinus/vpc/paced/fusion/unknown]
+      * ``rhythm_sample`` -> rhythm (B, T, 6)           [sinus/avb/paced/afib/bbb/ventricular]
+
+    All three read the same sample-resolution feature ``h_up`` (the E0
+    upsample+refine output), so the multi-head adds only three thin
+    Linear heads over the shared 500 Hz representation. beat/rhythm are
+    zero-init (safe defaults) and train from synth; frame + backbone
+    transfer from E0/v57c. Forward returns ``(frame, beat, rhythm)`` —
+    note 3-tuple (no reg slot), consistent with the no-reg decision.
+    """
+
+    def __init__(self, *, beat_n_classes: int = 6, rhythm_n_classes: int = 6,
+                 mid_split: int = 4, lower_kernel: int = 7, **kwargs):
+        super().__init__(mid_split=mid_split, lower_kernel=lower_kernel, **kwargs)
+        d = self.head_sample.in_features
+        self.beat_sample = nn.Linear(d, beat_n_classes)
+        self.rhythm_sample = nn.Linear(d, rhythm_n_classes)
+        for h in (self.beat_sample, self.rhythm_sample):
+            nn.init.zeros_(h.weight); nn.init.zeros_(h.bias)
+        self.model_config = dict(self.model_config)
+        self.model_config["arch"] = "vit_transformer_sample_res_convtok_mh_1ch"
+        self.model_config["beat_n_classes"] = int(beat_n_classes)
+        self.model_config["rhythm_n_classes"] = int(rhythm_n_classes)
+
+    def forward(self, x, lead_id):
+        sig, _ = self._split_signal_qrs(x)
+        B, T = sig.shape
+        n_patches = T // self.patch_size
+        h = self.conv_tok(sig.unsqueeze(1))
+        if h.shape[-1] != n_patches:
+            h = h[..., :n_patches]
+        h = h.transpose(1, 2)
+        if self.pos_enc is not None:
+            h = h + self.pos_enc[:, :n_patches]
+        if self.use_lead_emb:
+            h = h + self.lead_emb(lead_id).unsqueeze(1)
+        h_lower = h
+        for conv, norm in zip(self.lower_convs, self.lower_norms):
+            residual = h_lower
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = conv(h_lower)
+            h_lower = h_lower.transpose(1, 2)
+            h_lower = torch.nn.functional.gelu(h_lower)
+            h_lower = norm(h_lower + residual)
+        h_upper = self.upper_transformer(h_lower)
+        h_T = h_upper.transpose(1, 2)
+        h_up = torch.nn.functional.interpolate(
+            h_T, scale_factor=self.patch_size, mode="nearest")
+        h_up = h_up + self.refine(h_up)
+        h_up = h_up.transpose(1, 2)                          # (B, T, d)
+        return (self.head_sample(h_up),                      # frame
+                self.beat_sample(h_up),                      # beat
+                self.rhythm_sample(h_up))                    # rhythm
+
+
 class FrameClassifierTransformerNoAux2ChBoxIn(FrameClassifierTransformerNoAux2Ch):
     """v54o — noaux 2-ch where the qrs_box channel is **fed into patch
     embedding** alongside the signal (vs. the parent which discards it).

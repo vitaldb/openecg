@@ -1,6 +1,6 @@
 [project]
 name = "openecg"
-version = "0.4.0"
+version = "0.5.0"
 description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,10 +36,14 @@ classifiers = [
 ]
 # Core (`openecg.detect_qrs`, `openecg.detect_pacings`) is **numpy-only**.
 # All heavier dependencies live in optional extras — install only what you
-# need. The DSP primitives (Butterworth IIR, filtfilt, find_peaks) are
-# vendored in `openecg.dsp` so the core has no scipy dependency.
+# need. The DSP primitives (Butterworth IIR, filtfilt, find_peaks,
+# wavelets) live in the standalone `opendsp` package — same numpy-only
+# implementation, just extracted so openeeg/openvital can use it directly
+# without going through openecg. ``openecg.dsp`` re-exports for backwards
+# compatibility.
 dependencies = [
     "numpy>=1.26",
+    "opendsp>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -102,10 +106,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["openecg"]
 
-# Bundle the deployable boundary model (~1.5 MB) inside the wheel so
-# ``openecg.deploy.Inference()`` works with no extra downloads.
+# Bundle the deployable models inside the wheel so ``openecg.deploy.Inference()``
+# and ``openecg.load_codec()`` work with no extra downloads.
 [tool.hatch.build.targets.wheel.force-include]
 "openecg/models/boundary_int8.tflite" = "openecg/models/boundary_int8.tflite"
+"openecg/models/codec_v1.pt" = "openecg/models/codec_v1.pt"
+"openecg/models/codec_v1_int8.onnx" = "openecg/models/codec_v1_int8.onnx"
+"openecg/models/codec_v1_MODEL_CARD.md" = "openecg/models/codec_v1_MODEL_CARD.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
