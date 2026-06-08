@@ -17,8 +17,8 @@ OpenECG ships:
   so `Inference()` works with no extra downloads — usable on Android,
   iOS, Raspberry Pi, AED-class embedded targets. Inference uses only
   `tflite-runtime` (~5 MB) + numpy; no PyTorch, no TensorFlow.
-- A **13-symbol RLE token format** (`openecg.codec`, `openecg.vocab`)
-  that compresses 12-lead ECGs into a clinically interpretable sequence.
+- A **layered ECG codec** (`openecg.encode`, `openecg.encode_stream`)
+  that emits sample-resolution frame / beat / rhythm label channels.
 - **Loaders** for LUDB, QTDB, ISP, BUT PDB, PTB-XL and the
   synthetic AV-block dataset so every number in this README is
   reproducible from a clean clone.
@@ -65,39 +65,31 @@ window. Each window yields up to ~50 boundaries (P + QRS + T per beat).
 The model expects **single-channel input at 250 Hz** — resample
 upstream if your source is 500 / 1000 Hz.
 
-### Tokenize a hand-built event stream
-
-```python
-from openecg import codec, vocab
-
-events = [
-    (vocab.ID_ISO, 200), (vocab.ID_P, 80),  (vocab.ID_ISO, 80),
-    (vocab.ID_Q,   20),  (vocab.ID_R, 40),  (vocab.ID_S, 40),
-    (vocab.ID_ISO, 120), (vocab.ID_T, 200), (vocab.ID_ISO, 220),
-]
-packed = codec.encode(events)                     # uint16 RLE pack
-print(codec.render_compact(events))               # one char per event
-print(codec.decode(packed) == events)             # round-trip
-```
-
 ### Layered codec — three label streams, one call
 
 ```python
 import openecg
-model = openecg.load_codec()                # bundled pure-real codec (frame/beat/rhythm)
-codec = openecg.encode(ecg_500hz, fs=500, model=model)   # 10-s window @ 500 Hz
+codec = openecg.encode(ecg_500hz, fs=500, model="default")   # 10-s window @ 500 Hz
 codec.channels                              # uint8 (3, 5000) at sample resolution
 codec.frame, codec.beat, codec.rhythm       # per-layer views
 codec.events("beat", drop_class=0)          # [(start, end, class_id), ...]
 codec.to_codec_string(layer="frame")        # ASCII rendering
 ```
 
-The bundled codec (`openecg.load_codec()`, 1.16 M params) is trained on
-**pure real, human-expert annotations only** — no synthetic, no pseudo-labels.
-Held-out test: beat sinus F1 0.985 / VPC 0.884, rhythm sinus 0.899 / AFib 0.791.
-`bbb` / `paced` / `avb` rhythm are **experimental** (weak recall) — see the
-[model card](openecg/models/codec_v1_MODEL_CARD.md). Deploy artifacts (ONNX
-fp32 + int8) ship in `openecg/models/`.
+The bundled codec is **codec_v3** (`openecg.load_codec()`, 1.16 M params), trained
+on **pure real, human-expert annotations only** — including **lydus cardiologist
+hospital rhythm** — no synthetic, no pseudo-labels. Held-out:
+
+- **frame** boundary macro-F1 **0.840**, median timing **8.7 ms** (LUDB, 500 Hz)
+- **beat** sinus F1 **0.985** / VPC **0.858** (MIT-BIH DS2)
+- **rhythm** on real hospital ECG (lydus-test) macro **0.79** — avb 0.76 / paced 0.76 /
+  afib 0.88 / bbb 0.62
+
+v3 (lydus) **fixes the `avb` / `paced` / `bbb` rhythm classes** that v1/v2 flagged as
+experimental (codec_v2 was blind to hospital avb, F1 0.00). The rhythm gain is
+distribution-specific (hospital ≫ PTB-XL) — see the
+[model card](openecg/models/codec_v3_MODEL_CARD.md). `encode()` auto rank-normalizes
+its input. Deploy artifacts (int8 ONNX) ship in `openecg/models/`.
 
 The three channels run in parallel at the input signal's sample rate.
 Each layer is a separate label stream at a different abstraction — wave
