@@ -251,8 +251,8 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """Load the bundled layered-codec model (frame/beat/rhythm) for use as the
     ``model=`` argument to :func:`encode`.
 
-    Defaults to the packaged ``codec_v1.pt`` (pure-real, sample-resolution
-    multi-head, 500 Hz). Requires torch. The result is cached per (ckpt, device).
+    Defaults to the packaged ``codec_v3.pt`` (pure-real + lydus hospital rhythm,
+    sample-resolution multi-head, 500 Hz). Requires torch. Cached per (ckpt, device).
 
         >>> import openecg
         >>> m = openecg.load_codec()
@@ -260,7 +260,7 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """
     from pathlib import Path as _Path
     if ckpt is None:
-        ckpt = str(_Path(__file__).with_name("models") / "codec_v1.pt")
+        ckpt = str(_Path(__file__).with_name("models") / "codec_v3.pt")
     key = (ckpt, device)
     if key in _CODEC_CACHE:
         return _CODEC_CACHE[key]
@@ -307,6 +307,12 @@ class LayeredPredictor:
         if self._cache_key == id(signal) and self._cache is not None:
             return self._cache
         sig = np.asarray(signal, dtype=np.float32).ravel()
+        # The codec was trained on per-window rank-normalized signals; feeding a
+        # raw ECG silently degrades every head (frame F1 0.85 -> 0.65). Normalize
+        # here so the public API "just works" on raw input. rank_normalize is
+        # idempotent, so callers that already normalized are unaffected.
+        from openecg.dsp import rank_normalize as _rank_normalize
+        sig = np.asarray(_rank_normalize(sig), dtype=np.float32)
         x = torch.from_numpy(sig).unsqueeze(0).to(self.device)
         lid = torch.tensor([self.lead_id], dtype=torch.long, device=self.device)
         with torch.no_grad():
