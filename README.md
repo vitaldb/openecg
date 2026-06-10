@@ -76,20 +76,23 @@ codec.events("beat", drop_class=0)          # [(start, end, class_id), ...]
 codec.to_codec_string(layer="frame")        # ASCII rendering
 ```
 
-The bundled codec is **codec_v3** (`openecg.load_codec()`, 1.16 M params), trained
+The bundled codec is **codec_v4** (`openecg.load_codec()`, 1.16 M params), trained
 on **pure real, human-expert annotations only** — including **lydus cardiologist
 hospital rhythm** — no synthetic, no pseudo-labels. Held-out:
 
 - **frame** boundary macro-F1 **0.840**, median timing **8.7 ms** (LUDB, 500 Hz)
-- **beat** sinus F1 **0.985** / VPC **0.858** (MIT-BIH DS2)
+- **beat** sinus F1 **0.992** / VPC **0.935** (MIT-BIH DS2)
 - **rhythm** on real hospital ECG (lydus-test) macro **0.79** — avb 0.76 / paced 0.76 /
   afib 0.88 / bbb 0.62
 
-v3 (lydus) **fixes the `avb` / `paced` / `bbb` rhythm classes** that v1/v2 flagged as
-experimental (codec_v2 was blind to hospital avb, F1 0.00). The rhythm gain is
-distribution-specific (hospital ≫ PTB-XL) — see the
-[model card](openecg/models/codec_v3_MODEL_CARD.md). `encode()` auto rank-normalizes
-its input. Deploy artifacts (int8 ONNX) ship in `openecg/models/`.
+**v4 over v3: a pure VPC-beat upgrade** — only the beat head is retrained (on
++vitaldb anesthesiologist-validated intra-operative VPC beats), so frame and rhythm
+are **byte-identical to codec_v3** (zero regression) while VPC F1 jumps **0.858 →
+0.935** (a precision fix, 0.78 → 0.94). v3 (lydus) **fixes the `avb` / `paced` /
+`bbb` rhythm classes** that v1/v2 flagged as experimental (codec_v2 was blind to
+hospital avb, F1 0.00). The rhythm gain is distribution-specific (hospital ≫ PTB-XL)
+— see the [model card](openecg/models/codec_v4_MODEL_CARD.md). `encode()` auto
+rank-normalizes its input. Deploy artifacts (int8 ONNX) ship in `openecg/models/`.
 
 The three channels run in parallel at the input signal's sample rate.
 Each layer is a separate label stream at a different abstraction — wave

@@ -251,8 +251,10 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """Load the bundled layered-codec model (frame/beat/rhythm) for use as the
     ``model=`` argument to :func:`encode`.
 
-    Defaults to the packaged ``codec_v3.pt`` (pure-real + lydus hospital rhythm,
-    sample-resolution multi-head, 500 Hz). Requires torch. Cached per (ckpt, device).
+    Defaults to the packaged ``codec_v4.pt`` (pure-real + lydus hospital rhythm,
+    sample-resolution multi-head, 500 Hz). codec_v4 == codec_v3 with the beat
+    head upgraded on +vitaldb VPC (frame & rhythm are byte-identical to codec_v3;
+    DS2 VPC F1 0.858 -> 0.935). Requires torch. Cached per (ckpt, device).
 
         >>> import openecg
         >>> m = openecg.load_codec()
@@ -260,7 +262,7 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """
     from pathlib import Path as _Path
     if ckpt is None:
-        ckpt = str(_Path(__file__).with_name("models") / "codec_v3.pt")
+        ckpt = str(_Path(__file__).with_name("models") / "codec_v4.pt")
     key = (ckpt, device)
     if key in _CODEC_CACHE:
         return _CODEC_CACHE[key]

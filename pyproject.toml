@@ -1,6 +1,6 @@
 [project]
 name = "openecg"
-version = "0.6.0"
+version = "0.7.0"
 description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -126,6 +126,9 @@ packages = ["openecg"]
 "openecg/models/codec_v3.pt" = "openecg/models/codec_v3.pt"
 "openecg/models/codec_v3_int8.onnx" = "openecg/models/codec_v3_int8.onnx"
 "openecg/models/codec_v3_MODEL_CARD.md" = "openecg/models/codec_v3_MODEL_CARD.md"
+"openecg/models/codec_v4.pt" = "openecg/models/codec_v4.pt"
+"openecg/models/codec_v4_int8.onnx" = "openecg/models/codec_v4_int8.onnx"
+"openecg/models/codec_v4_MODEL_CARD.md" = "openecg/models/codec_v4_MODEL_CARD.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
