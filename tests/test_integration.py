@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_record_1_lead_ii_end_to_end():
-    from openecg import codec, delineate, labeler, ludb, pacer
+    from openecg import delineate, labeler, ludb, pacer
 
     record = ludb.load_record(1)
     sig = record["ii"]
@@ -33,18 +33,11 @@ def test_record_1_lead_ii_end_to_end():
     total_ms = sum(ms for _, ms in events)
     assert 9900 <= total_ms <= 10100, f"expected ~10s, got {total_ms}ms"
 
-    packed = codec.encode(events)
-    assert packed.dtype == np.uint16
-    assert codec.decode(packed) == events
-
-    art = codec.render_timed(events, ms_per_char=20)
-    assert 480 <= len(art) <= 520, f"expected ~500 chars, got {len(art)}"
-    print(f"\nRecord 1 lead II ASCII art ({len(art)} chars):")
-    print(art)
+    assert len(events) > 0
 
 
 def test_all_12_leads_record_1_no_crash():
-    from openecg import codec, delineate, labeler, ludb, pacer
+    from openecg import delineate, labeler, ludb, pacer
 
     record = ludb.load_record(1)
     for lead, sig in record.items():
@@ -52,9 +45,6 @@ def test_all_12_leads_record_1_no_crash():
         spikes = pacer.detect_spikes(sig, fs=500)
         events = labeler.label(dr, spikes.tolist(), n_samples=len(sig), fs=500)
         assert len(events) > 0, f"empty events for lead {lead}"
-        # Round-trip must be lossless
-        packed = codec.encode(events)
-        assert codec.decode(packed) == events
 
 
 def test_pacer_record_8_detects_spikes():

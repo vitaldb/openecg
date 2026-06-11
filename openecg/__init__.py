@@ -46,18 +46,22 @@ Lower-level pieces (``pacer_center_surround_score``, the multichannel
 features, the BUT PDB / LUDB / PTB-XL / MIT-BIH loaders, etc.) live in
 their respective modules and are not re-exported here.
 """
-__version__ = "0.6.0"
+__version__ = "0.8.0"
 
 from openecg.afib import afib_score, is_afib
 from openecg.dsp import rank_normalize, remove_baseline_wander
-from openecg.layered import LayeredCodec, encode, encode_stream, load_codec
+from openecg.layered import (
+    LayeredCodec, encode, encode_stream, load_codec, load_codec_onnx,
+)
 from openecg.pacer import detect_pacings, is_paced_record
 from openecg.qrs import detect_qrs, measure_qrs_widths
+from openecg.report import EcgReport, report
 
 __all__ = [
     "afib_score", "detect_pacings", "detect_qrs",
-    "encode", "encode_stream", "load_codec", "is_afib",
+    "encode", "encode_stream", "load_codec", "load_codec_onnx", "is_afib",
     "is_paced_record", "LayeredCodec", "measure_qrs_widths",
     "rank_normalize", "remove_baseline_wander",
+    "report", "EcgReport",
     "__version__",
 ]

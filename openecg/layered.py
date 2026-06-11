@@ -25,6 +25,7 @@ sliding is a thin loop on top.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from os import PathLike
 from typing import Callable, Optional
 
 import numpy as np
@@ -95,6 +96,32 @@ class LayeredCodec:
     channels: np.ndarray
     layer_names: tuple[str, ...] = LAYER_NAMES
     eval_margin_s: float = EVAL_MARGIN_S
+
+    def __post_init__(self) -> None:
+        self.fs = int(self.fs)
+        if self.fs <= 0:
+            raise ValueError(f"fs must be positive, got {self.fs}")
+        self.channels = np.asarray(self.channels, dtype=np.uint8)
+        if self.channels.ndim != 2:
+            raise ValueError(
+                f"channels must be 2-D (n_layers, n_samples), got "
+                f"shape {self.channels.shape}"
+            )
+        if self.channels.shape[0] != len(self.layer_names):
+            raise ValueError(
+                f"channels has {self.channels.shape[0]} layers but "
+                f"layer_names has {len(self.layer_names)} entries"
+            )
+        if tuple(self.layer_names) != LAYER_NAMES:
+            unknown = set(self.layer_names) - set(LAYER_NAMES)
+            if unknown:
+                raise ValueError(f"unknown layer names: {sorted(unknown)}")
+        self.layer_names = tuple(self.layer_names)
+        self.eval_margin_s = float(self.eval_margin_s)
+        if self.eval_margin_s < 0:
+            raise ValueError(
+                f"eval_margin_s must be non-negative, got {self.eval_margin_s}"
+            )
 
     @property
     def frame(self) -> np.ndarray:  return self.channels[0]
@@ -251,8 +278,10 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """Load the bundled layered-codec model (frame/beat/rhythm) for use as the
     ``model=`` argument to :func:`encode`.
 
-    Defaults to the packaged ``codec_v3.pt`` (pure-real + lydus hospital rhythm,
-    sample-resolution multi-head, 500 Hz). Requires torch. Cached per (ckpt, device).
+    Defaults to the packaged ``codec_v4.pt`` (pure-real + lydus hospital rhythm,
+    sample-resolution multi-head, 500 Hz). codec_v4 == codec_v3 with the beat
+    head upgraded on +vitaldb VPC (frame & rhythm are byte-identical to codec_v3;
+    DS2 VPC F1 0.858 -> 0.935). Requires torch. Cached per (ckpt, device).
 
         >>> import openecg
         >>> m = openecg.load_codec()
@@ -260,7 +289,7 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """
     from pathlib import Path as _Path
     if ckpt is None:
-        ckpt = str(_Path(__file__).with_name("models") / "codec_v3.pt")
+        ckpt = str(_Path(__file__).with_name("models") / "codec_v4.pt")
     key = (ckpt, device)
     if key in _CODEC_CACHE:
         return _CODEC_CACHE[key]
@@ -269,6 +298,46 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     model.eval()
     _CODEC_CACHE[key] = model
     return model
+
+
+def load_codec_onnx(onnx_path: str | None = None, *, version: str = "v4"):
+    """Load the bundled **int8 ONNX** layered codec as a ``model=`` argument
+    for :func:`encode` — a torch-free path that needs only ``onnxruntime``.
+
+        >>> import openecg
+        >>> m = openecg.load_codec_onnx()            # ~3.6 MB, no torch
+        >>> codec = openecg.encode(signal_500hz, fs=500, model=m)
+
+    Same heads as :func:`load_codec` (frame / beat / rhythm) at 500 Hz; the
+    int8 graph is byte-light enough for on-device / agent deployment. See
+    :class:`openecg.deploy.OnnxCodec`.
+    """
+    from openecg.deploy import OnnxCodec
+    return OnnxCodec(onnx_path, version=version)
+
+
+def _infer_model_device(model) -> str:
+    """Best-effort device string for torch modules."""
+    try:
+        return str(next(model.parameters()).device)
+    except (AttributeError, StopIteration):
+        return "cpu"
+
+
+def _is_layered_encoder(model) -> bool:
+    return isinstance(model, LayeredPredictor) or (
+        hasattr(model, "encode") and not hasattr(model, "parameters")
+    )
+
+
+def _is_codec_ref(model) -> bool:
+    return isinstance(model, (str, PathLike))
+
+
+def _resolve_codec_ref(model) -> str | None:
+    if isinstance(model, str) and model.lower() in {"default", "bundled", "v1"}:
+        return None
+    return str(model)
 
 
 FramePredictor   = Callable[[np.ndarray, int, int], np.ndarray]
@@ -292,11 +361,11 @@ class LayeredPredictor:
     callback path also runs forward only once per call.
     """
 
-    def __init__(self, model, *, lead_id: int = 0, device: str = "cpu",
+    def __init__(self, model, *, lead_id: int = 0, device: str | None = None,
                  frame_ms: int = 20):
         self.model = model.eval()
-        self.device = device
-        self.model.to(device)
+        self.device = device or _infer_model_device(model)
+        self.model.to(self.device)
         self.lead_id = int(lead_id)
         self.frame_ms = int(frame_ms)
         self._cache_key: int | None = None
@@ -394,6 +463,7 @@ def encode(
     lead_id: int = 0,
     frame_ms: int = 20,
     eval_margin_s: float = EVAL_MARGIN_S,
+    device: str | None = None,
 ) -> LayeredCodec:
     """Encode one ECG window into the layered codec.
 
@@ -401,11 +471,12 @@ def encode(
     ----------
     signal : 1-D float array at ``fs`` Hz.
     fs : sample rate of ``signal``.  Channels are returned at this rate.
-    model : optional multi-head ``FrameClassifierTransformerLayered1Ch``
-        instance.  When given, a :class:`LayeredPredictor` is built once
-        and used to fill *all three* layers from one forward pass — the
-        ``frame_predictor`` / ``rhythm_predictor`` / ``beat_classifier``
-        kwargs are ignored in this path.  This is the v57+ deploy path.
+    model : optional multi-head model, pre-built :class:`LayeredPredictor`,
+        or checkpoint reference.  Strings / PathLike objects are loaded lazily
+        through :func:`load_codec`; pass ``"default"`` for the bundled codec.
+        When model is given, it fills *all three* layers and the
+        ``frame_predictor`` / ``rhythm_predictor`` / ``beat_classifier`` kwargs
+        are ignored.
     frame_predictor : ``(signal, fs, lead_id) -> uint8 frames`` at
         ``frame_ms`` resolution with values in ``SUPER_*``.  Defaults to
         the bundled TFLite delineator.
@@ -420,8 +491,14 @@ def encode(
     LayeredCodec with ``channels`` shape ``(N_LAYERS, len(signal))``.
     """
     if model is not None:
-        c = LayeredPredictor(model, lead_id=lead_id, frame_ms=frame_ms
-                             ).encode(signal, fs=fs)
+        if _is_codec_ref(model):
+            model = load_codec(_resolve_codec_ref(model), device=device or "cpu")
+        predictor = (
+            model if _is_layered_encoder(model)
+            else LayeredPredictor(model, lead_id=lead_id, device=device,
+                                  frame_ms=frame_ms)
+        )
+        c = predictor.encode(signal, fs=fs)
         c.eval_margin_s = float(eval_margin_s)
         return c
     sig = np.asarray(signal, dtype=np.float32).ravel()
@@ -495,6 +572,22 @@ def encode_stream(
             f"({2 * eval_margin_s}s)")
     inner_n = win_n - 2 * mar_n
     n = sig.size
+    if _is_codec_ref(encode_kwargs.get("model")):
+        encode_kwargs = dict(encode_kwargs)
+        encode_kwargs["model"] = load_codec(
+            _resolve_codec_ref(encode_kwargs["model"]),
+            device=encode_kwargs.get("device") or "cpu",
+        )
+    if encode_kwargs.get("model") is not None and not _is_layered_encoder(
+        encode_kwargs["model"]
+    ):
+        encode_kwargs = dict(encode_kwargs)
+        encode_kwargs["model"] = LayeredPredictor(
+            encode_kwargs["model"],
+            lead_id=int(encode_kwargs.get("lead_id", 0)),
+            device=encode_kwargs.get("device"),
+            frame_ms=int(encode_kwargs.get("frame_ms", 20)),
+        )
 
     if n <= win_n:                                              # single window
         return encode(sig, fs=fs, eval_margin_s=eval_margin_s,
@@ -534,8 +627,28 @@ def encode_stream(
     return LayeredCodec(fs=fs, channels=channels, eval_margin_s=0.0)
 
 
+def frames_to_events(frames: np.ndarray, frame_ms: int = 20
+                     ) -> list[tuple[int, int]]:
+    """Run-length encode per-frame class IDs to ``(class_id, length_ms)``.
+
+    This is a lightweight layered-codec utility for validation and boundary
+    extraction. It intentionally returns plain Python events instead of a
+    separate packed token format.
+    """
+    arr = np.asarray(frames, dtype=np.uint8).ravel()
+    if arr.size == 0:
+        return []
+    change_idx = np.flatnonzero(np.diff(arr)) + 1
+    boundaries = np.concatenate(([0], change_idx, [arr.size]))
+    out: list[tuple[int, int]] = []
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        out.append((int(arr[start]), int(end - start) * int(frame_ms)))
+    return out
+
+
 __all__ = [
-    "encode", "encode_stream", "LayeredCodec", "LayeredPredictor",
+    "encode", "encode_stream", "load_codec", "load_codec_onnx",
+    "LayeredCodec", "LayeredPredictor", "frames_to_events",
     "LAYER_NAMES", "N_LAYERS", "EVAL_MARGIN_S", "DEFAULT_WINDOW_S",
     "BEAT_NONE", "BEAT_SINUS", "BEAT_VPC", "BEAT_PACED", "BEAT_FUSION",
     "BEAT_UNKNOWN", "BEAT_NAMES",

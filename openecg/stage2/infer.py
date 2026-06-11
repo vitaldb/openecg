@@ -4,7 +4,7 @@
 import numpy as np
 import torch
 
-from openecg import codec
+from openecg.layered import frames_to_events
 from openecg.stage2.model import FrameClassifier
 from openecg.stage2.train import load_checkpoint, load_checkpoint_blob
 
@@ -80,9 +80,9 @@ def predict_frames(model, sig, lead_id, device="cuda"):
 
 
 def predict_to_events(model, sig, lead_id, device="cuda", frame_ms=20):
-    """Single-sequence inference to RLE events (for boundary extraction)."""
+    """Single-sequence inference to frame-class runs (for boundary extraction)."""
     frames = predict_frames(model, sig, lead_id, device=device)
-    return codec.from_frames(frames, frame_ms=frame_ms)
+    return frames_to_events(frames, frame_ms=frame_ms)
 
 
 def predict_to_boundaries(

@@ -365,6 +365,19 @@ def detect_qrs(
             last_peak = peak
 
     peaks = np.asarray(accepted, dtype=np.int64)
+
+    # Reject low-amplitude spurious peaks: high-pass filtfilt transients at the
+    # signal boundaries (and noise bursts) can produce a large |gradient| with
+    # tiny actual deflection, firing the gradient threshold. A real QRS deflects
+    # comparably to the others, so drop peaks whose amplitude (vs the signal
+    # median, polarity-agnostic for inverted leads) is far below the median peak
+    # amplitude. Relative threshold -> low-voltage ECGs keep all their beats.
+    if peaks.size >= 3:
+        amp = np.abs(sig[peaks] - np.median(sig))
+        med = float(np.median(amp))
+        if med > 0:
+            peaks = peaks[amp >= 0.4 * med]
+
     if not return_widths and not return_boundaries:
         return peaks
     out = measure_qrs_widths(sig, fs, peaks, return_boundaries=return_boundaries)

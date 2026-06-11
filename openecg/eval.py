@@ -175,10 +175,52 @@ def _empty_boundary_result():
 def events_to_super_frames(events, n_samples, fs=500, frame_ms=20):
     """Pipeline events → per-frame supercategory array.
     Used by validate_v1.py and ablate_methods.py."""
-    from openecg import codec
     total_ms = round(n_samples * 1000.0 / fs)
-    frames = codec.to_frames(events, frame_ms=frame_ms, total_ms=total_ms)
+    frames = _events_to_frames(events, frame_ms=frame_ms, total_ms=total_ms)
     return to_supercategory(frames)
+
+
+def _events_to_frames(
+    events: list[tuple[int, int]],
+    frame_ms: int = 20,
+    total_ms: int | None = None,
+) -> np.ndarray:
+    """Expand legacy labeler events to per-frame symbol IDs."""
+    if total_ms is None:
+        total_ms = sum(ms for _, ms in events)
+    n_frames = round(total_ms / frame_ms)
+    out = np.zeros(n_frames, dtype=np.uint8)
+
+    intervals = []
+    cum = 0
+    for sym, ms in events:
+        intervals.append((cum, cum + ms, sym))
+        cum += ms
+
+    for f in range(n_frames):
+        f_start = f * frame_ms
+        f_end = f_start + frame_ms
+        overlap = {}
+        spike_present = False
+        for s_start, s_end, sym in intervals:
+            if s_end <= f_start:
+                continue
+            if s_start >= f_end:
+                break
+            ov = min(s_end, f_end) - max(s_start, f_start)
+            if ov <= 0:
+                continue
+            if sym == vocab.ID_PACER:
+                spike_present = True
+            else:
+                overlap[sym] = overlap.get(sym, 0) + ov
+        if spike_present:
+            out[f] = vocab.ID_PACER
+        elif overlap:
+            out[f] = max(overlap, key=overlap.get)
+        else:
+            out[f] = vocab.ID_ISO
+    return out
 
 
 def gt_to_super_frames(gt_ann, n_samples, fs=500, frame_ms=20):

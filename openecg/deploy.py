@@ -280,6 +280,98 @@ def bundled_model_path() -> Path:
     return p
 
 
+# -- ONNX-backed layered codec (onnxruntime + numpy, no torch) --------------
+
+CODEC_SEQ = 5000          # samples per window the bundled codec expects (10 s @ 500 Hz)
+CODEC_FS = 500            # native sample rate of the codec ONNX graph
+
+
+def bundled_codec_onnx_path(version: str = "v4") -> Path:
+    """Path to the int8 ONNX layered codec shipped inside the package.
+
+    ``codec_{version}_int8.onnx`` (~3.6 MB) carries all three heads
+    (frame / beat / rhythm). Raises ``FileNotFoundError`` if missing.
+    """
+    p = Path(__file__).resolve().parent / "models" / f"codec_{version}_int8.onnx"
+    if not p.exists():
+        raise FileNotFoundError(
+            f"Bundled ONNX codec not found at {p}. Export it with "
+            f"`python -m scripts.export_encoder_onnx`, or pass an explicit path."
+        )
+    return p
+
+
+class OnnxCodec:
+    """ONNX-backed layered codec — a torch-free drop-in for ``model=``.
+
+    Loads the bundled int8 codec (~3.6 MB, all three heads) via
+    ``onnxruntime`` and exposes :meth:`encode` returning a
+    :class:`~openecg.layered.LayeredCodec`, so it plugs straight into
+    :func:`openecg.encode` / :func:`openecg.encode_stream` /
+    :func:`openecg.report` without PyTorch::
+
+        >>> from openecg.deploy import OnnxCodec
+        >>> import openecg
+        >>> codec = openecg.encode(sig_500hz, fs=500, model=OnnxCodec())
+        >>> report = openecg.report(sig_500hz, fs=500, model=OnnxCodec())
+
+    Deploy footprint: ``onnxruntime`` (~15 MB) + ``numpy``. Native rate is
+    500 Hz with a fixed 10-s (5000-sample) window; shorter input is
+    zero-padded, longer input is handled window-by-window by
+    ``encode_stream`` (which feeds this exactly 5000 samples per call).
+    """
+
+    SEQ = CODEC_SEQ
+
+    def __init__(self, onnx_path: str | Path | None = None, *,
+                 version: str = "v4", providers: list[str] | None = None):
+        import onnxruntime as ort  # local: keep onnxruntime optional
+        if onnx_path is None:
+            onnx_path = bundled_codec_onnx_path(version)
+        self.path = str(onnx_path)
+        self._sess = ort.InferenceSession(
+            self.path, providers=providers or ["CPUExecutionProvider"])
+        self._inp = self._sess.get_inputs()[0].name
+        # Map outputs by name so we never depend on graph output ordering.
+        names = [o.name for o in self._sess.get_outputs()]
+        self._idx = {head: next(i for i, n in enumerate(names) if head in n)
+                     for head in ("frame", "beat", "rhythm")}
+
+    def encode(self, signal: np.ndarray, fs: int = CODEC_FS):
+        from openecg.layered import LayeredCodec
+        from openecg.eval import ALL_SUPER_QRS_CLASSES, SUPER_OTHER, SUPER_QRS
+
+        sig = np.asarray(signal, dtype=np.float32).ravel()
+        n = int(sig.size)
+        # The codec was trained on per-window rank-normalized input; normalize
+        # here so raw ECG "just works" (rank_normalize is idempotent).
+        sig = np.asarray(rank_normalize(sig), dtype=np.float32)
+        if sig.size >= self.SEQ:
+            x = sig[:self.SEQ]
+        else:
+            x = np.zeros(self.SEQ, dtype=np.float32)
+            x[:sig.size] = sig
+        outs = self._sess.run(None, {self._inp: x[None, :].astype(np.float32)})
+
+        def _arg(head, n_keep):
+            a = outs[self._idx[head]][0].argmax(-1).astype(np.uint8)
+            return a[:n_keep]
+
+        frame = _arg("frame", min(n, self.SEQ))
+        beat = _arg("beat", min(n, self.SEQ))
+        rhythm = _arg("rhythm", min(n, self.SEQ))
+        if n > self.SEQ:                       # only via direct >10 s encode()
+            pad = n - self.SEQ
+            frame = np.concatenate([frame, np.full(pad, SUPER_OTHER, np.uint8)])
+            beat = np.concatenate([beat, np.zeros(pad, np.uint8)])
+            rhythm = np.concatenate([rhythm, np.zeros(pad, np.uint8)])
+        # Beat layer is QRS-gated (mirror LayeredPredictor.encode).
+        qrs_mask = np.isin(frame, ALL_SUPER_QRS_CLASSES)
+        beat = np.where(qrs_mask, beat, 0).astype(np.uint8)
+        channels = np.stack([frame, beat, rhythm], axis=0)
+        return LayeredCodec(fs=int(fs), channels=channels)
+
+
 class Inference:
     """TFLite-backed boundary detector (canonical model: v56c int8).
 
@@ -310,8 +402,13 @@ class Inference:
         try:
             from tflite_runtime.interpreter import Interpreter  # type: ignore
         except ImportError:
-            # Fallback to full TF if tflite-runtime isn't installed.
-            from tensorflow.lite.python.interpreter import Interpreter  # type: ignore
+            try:
+                # ai-edge-litert is the supported Windows path (no
+                # tflite-runtime wheel exists on PyPI for Windows).
+                from ai_edge_litert.interpreter import Interpreter  # type: ignore
+            except ImportError:
+                # Final fallback to full TensorFlow.
+                from tensorflow.lite.python.interpreter import Interpreter  # type: ignore
         self.path = str(tflite_path)
         self._interp = Interpreter(model_path=self.path, num_threads=num_threads)
         self._interp.allocate_tensors()
@@ -377,6 +474,10 @@ __all__ = [
     "preprocess_window",
     "logits_to_boundaries",
     "bundled_model_path",
+    "bundled_codec_onnx_path",
+    "OnnxCodec",
+    "CODEC_SEQ",
+    "CODEC_FS",
     "Inference",
     "Boundary",
     "DEFAULT_CKPT",

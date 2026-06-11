@@ -29,15 +29,19 @@ OpenECG ships:
 # Core (numpy-only): tokenizer + signal processing primitives
 pip install openecg
 
-# Inference (ships a 1.5 MB int8 TFLite model — no torch needed)
+# Structured report on the int8 ONNX codec — torch-free (onnxruntime + numpy)
+pip install "openecg[report]"
+
+# Inference (ships int8 TFLite boundary model + ONNX codec — no torch needed)
 pip install "openecg[deploy]"
 
 # Training / evaluation (loaders, stage2 transformer, optional NeuroKit2)
 pip install "openecg[loaders,stage2]"
 ```
 
-PyTorch is **only** required for training and for `[deploy-export]`.
-The default inference path uses TFLite via `tflite-runtime`.
+PyTorch is **only** required for training and for `[deploy-export]`. The
+inference paths are torch-free: TFLite (`tflite-runtime`) for the boundary
+detector, ONNX (`onnxruntime`) for the layered codec and `openecg.report()`.
 
 ## Quickstart
 
@@ -76,20 +80,23 @@ codec.events("beat", drop_class=0)          # [(start, end, class_id), ...]
 codec.to_codec_string(layer="frame")        # ASCII rendering
 ```
 
-The bundled codec is **codec_v3** (`openecg.load_codec()`, 1.16 M params), trained
+The bundled codec is **codec_v4** (`openecg.load_codec()`, 1.16 M params), trained
 on **pure real, human-expert annotations only** — including **lydus cardiologist
 hospital rhythm** — no synthetic, no pseudo-labels. Held-out:
 
 - **frame** boundary macro-F1 **0.840**, median timing **8.7 ms** (LUDB, 500 Hz)
-- **beat** sinus F1 **0.985** / VPC **0.858** (MIT-BIH DS2)
+- **beat** sinus F1 **0.992** / VPC **0.935** (MIT-BIH DS2)
 - **rhythm** on real hospital ECG (lydus-test) macro **0.79** — avb 0.76 / paced 0.76 /
   afib 0.88 / bbb 0.62
 
-v3 (lydus) **fixes the `avb` / `paced` / `bbb` rhythm classes** that v1/v2 flagged as
-experimental (codec_v2 was blind to hospital avb, F1 0.00). The rhythm gain is
-distribution-specific (hospital ≫ PTB-XL) — see the
-[model card](openecg/models/codec_v3_MODEL_CARD.md). `encode()` auto rank-normalizes
-its input. Deploy artifacts (int8 ONNX) ship in `openecg/models/`.
+**v4 over v3: a pure VPC-beat upgrade** — only the beat head is retrained (on
++vitaldb anesthesiologist-validated intra-operative VPC beats), so frame and rhythm
+are **byte-identical to codec_v3** (zero regression) while VPC F1 jumps **0.858 →
+0.935** (a precision fix, 0.78 → 0.94). v3 (lydus) **fixes the `avb` / `paced` /
+`bbb` rhythm classes** that v1/v2 flagged as experimental (codec_v2 was blind to
+hospital avb, F1 0.00). The rhythm gain is distribution-specific (hospital ≫ PTB-XL)
+— see the [model card](openecg/models/codec_v4_MODEL_CARD.md). `encode()` auto
+rank-normalizes its input. Deploy artifacts (int8 ONNX) ship in `openecg/models/`.
 
 The three channels run in parallel at the input signal's sample rate.
 Each layer is a separate label stream at a different abstraction — wave
@@ -106,6 +113,39 @@ transitions on any single channel.
 VTach, AFib, and similar rhythm-level events sit on layer 2 — they're
 *not* a new frame class, matching MIT-BIH / WFDB convention. See
 `openecg/layered.py` for the predictor-injection points.
+
+### Structured report — one call, agent-ready JSON
+
+For monitoring agents (or anyone who wants the conclusion, not the per-sample
+channels), `openecg.report()` fuses the codec with the pure-numpy QRS detector
+and the rule-based AFib check into one JSON-serialisable reading:
+
+```python
+import openecg
+rep = openecg.report(ecg_500hz, fs=500)      # torch-free: runs the int8 ONNX codec
+rep.summary
+# 'Sinus rhythm, HR 84 bpm, regular. No ectopy. (AFib rule: negative.)'
+rep.to_json(indent=2)                        # drop straight into an LLM / API payload
+```
+
+```jsonc
+{
+  "rhythm":      {"label": "sinus", "confidence": 1.0, "distribution": {"sinus": 1.0}},
+  "heart_rate":  {"bpm": 84, "rr_mean_ms": 714, "rr_cv": 0.03, "regularity": "regular"},
+  "beats":       {"count": 14, "by_type": {"sinus": 14}, "vpc_count": 0, "events": [...]},
+  "intervals_ms":{"p_duration": 112, "qrs_duration": 103, "t_duration": 178,
+                  "pr": 148, "qt": 370},          // wave intervals from the delineator
+  "afib_check":  {"is_afib": false, "reason": "no rule fired", "agrees_with_codec": true},
+  "flags":       []                                // bradycardia / tachycardia / ectopy / ...
+}
+```
+
+Heart rate and R-peaks come from the validated `detect_qrs`; rhythm, beat type
+and wave intervals from the codec; AFib is an **independent rule-based second
+opinion** cross-checked against the codec's rhythm head (a disagreement raises a
+flag). By default it runs the **int8 ONNX codec** (`pip install openecg[report]`
+— onnxruntime + numpy, **no PyTorch**); `model="torch"` uses the checkpoint,
+`model="rules"` skips the codec entirely (heart rate + AFib on pure numpy).
 
 ### Continuous-use codec — 2-s edge guard
 

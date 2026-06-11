@@ -124,3 +124,30 @@ def test_fs_invariance(fs):
     sig, gt = _synthesize(fs=fs)
     det = detect_qrs(sig, fs=fs)
     assert _match_count(gt, det, fs=fs) == len(gt)
+
+
+def test_low_amplitude_edge_transient_rejected():
+    """A tiny, sharp boundary deflection (a high-pass filtfilt transient
+    or noise burst) has a large |gradient| but small amplitude — it must
+    NOT be reported as a beat, while the real QRS complexes survive.
+
+    Regression for the VitalDB OR1 artifact (spurious peak near sample 50
+    at ~0.27 mV vs real 1.45 mV R-waves)."""
+    sig, gt = _synthesize(rr_ms=800, n_beats=8)
+    # Inject a narrow ~0.15 mV spike (≈10% of the 1.0 R-wave) near the start.
+    spike = 40
+    sig[spike:spike + 3] += np.array([0.05, 0.15, 0.05])
+    det = detect_qrs(sig, fs=FS)
+    # Real beats all still found ...
+    assert _match_count(gt, det) == len(gt)
+    # ... and no detection lands on the low-amplitude spike.
+    assert not np.any(np.abs(det - spike) <= 5)
+
+
+def test_low_voltage_ecg_keeps_all_beats():
+    """The amplitude rejection is *relative* — a uniformly low-voltage ECG
+    (all beats small) must keep every beat, not lose them to an absolute floor."""
+    sig, gt = _synthesize(rr_ms=800, n_beats=8)
+    sig = sig * 0.15            # scale the whole strip down to ~0.15 mV R-waves
+    det = detect_qrs(sig, fs=FS)
+    assert _match_count(gt, det) == len(gt)

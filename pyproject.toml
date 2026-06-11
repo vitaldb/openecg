@@ -1,6 +1,6 @@
 [project]
 name = "openecg"
-version = "0.6.0"
+version = "0.8.0"
 description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -65,10 +65,15 @@ stage2 = [
 # only by `openecg.delineate.run`.
 delineate = ["neurokit2>=0.2.7", "scipy>=1.11"]
 
-# TFLite inference runtime for boundary/segmentation deploy
-# (`openecg.deploy.Inference`). ~5 MB wheel, no TensorFlow needed.
-# v55a int8 ships at ~1.1 MB. PyTorch is NOT required at inference time.
-deploy = ["tflite-runtime>=2.14", "numpy>=1.26"]
+# Inference runtimes for deploy — TFLite for the boundary detector
+# (`openecg.deploy.Inference`, ~5 MB wheel) and onnxruntime for the int8
+# layered codec (`openecg.deploy.OnnxCodec` / `openecg.report`, ~3.6 MB
+# model). PyTorch is NOT required at inference time for either.
+deploy = ["tflite-runtime>=2.14", "onnxruntime>=1.17", "numpy>=1.26"]
+
+# Agent-facing structured report (`openecg.report`) on the torch-free int8
+# ONNX codec — the minimal lightweight path: onnxruntime + numpy only.
+report = ["onnxruntime>=1.17", "numpy>=1.26"]
 
 # Dev-only: PyTorch → TFLite conversion for `openecg.deploy.export_boundary_tflite`.
 deploy-export = [
@@ -85,6 +90,7 @@ all = [
     "huggingface-hub>=0.20",
     "neurokit2>=0.2.7",
     "tflite-runtime>=2.14",
+    "onnxruntime>=1.17",
 ]
 
 [project.urls]
@@ -126,6 +132,9 @@ packages = ["openecg"]
 "openecg/models/codec_v3.pt" = "openecg/models/codec_v3.pt"
 "openecg/models/codec_v3_int8.onnx" = "openecg/models/codec_v3_int8.onnx"
 "openecg/models/codec_v3_MODEL_CARD.md" = "openecg/models/codec_v3_MODEL_CARD.md"
+"openecg/models/codec_v4.pt" = "openecg/models/codec_v4.pt"
+"openecg/models/codec_v4_int8.onnx" = "openecg/models/codec_v4_int8.onnx"
+"openecg/models/codec_v4_MODEL_CARD.md" = "openecg/models/codec_v4_MODEL_CARD.md"
 
 [tool.hatch.build.targets.sdist]
 include = [

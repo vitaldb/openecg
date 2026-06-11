@@ -1,5 +1,5 @@
 # openecg/labeler.py
-"""Convert NK delineate output + pacer spikes -> RLE token stream.
+"""Convert NK delineate output + pacer spikes -> legacy label events.
 
 Algorithm (per the spec section 6):
 1. Initialize sample-level array as iso
@@ -15,6 +15,7 @@ from openecg import vocab
 from openecg.delineate import DelineateResult
 
 WIDE_QRS_THRESHOLD_MS = 120.0
+MS_PER_UNIT = 4
 
 
 def _safe_int(x, n: int):
@@ -44,7 +45,7 @@ def label(
     n_samples: int,
     fs: int = 500,
 ) -> list:
-    """Build sample-level label array, then run-length compress to RLE events.
+    """Build sample-level label array, then run-length compress to events.
 
     Returns list of (symbol_id, length_ms) tuples.
     """
@@ -123,12 +124,10 @@ def label(
 def _rle_compress(labels: np.ndarray, ms_per_sample: float) -> list:
     """Group consecutive identical labels -> list of (symbol_id, length_ms).
 
-    Lengths are snapped to the codec grid (4ms) using cumulative rounding so
+    Lengths are snapped to a 4ms grid using cumulative rounding so
     rounding error never drifts more than 4ms from the true total. Single-sample
-    pacer spikes are always emitted as 4ms (the minimum codec quantum).
+    pacer spikes are always emitted as 4ms.
     """
-    from openecg.codec import MS_PER_UNIT
-
     if len(labels) == 0:
         return []
     change_idx = np.flatnonzero(np.diff(labels)) + 1

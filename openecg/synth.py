@@ -40,7 +40,7 @@ from openecg import ludb
 LEADS_12 = ludb.LEADS_12
 WINDOW_SAMPLES_DEFAULT = 2500   # 10s @ 250Hz
 
-Scenario = Literal["mobitz1", "mobitz2", "complete", "paced"]
+Scenario = Literal["mobitz1", "mobitz2", "complete", "paced", "vt"]
 
 
 @dataclass
@@ -464,6 +464,8 @@ def generate_avb_window(
     junctional_bpm_range: tuple[float, float] = (40.0, 60.0),
     ventricular_bpm_range: tuple[float, float] = (25.0, 45.0),
     paced_bpm_range: tuple[float, float] = (50.0, 80.0),
+    vt_bpm_range: tuple[float, float] = (150.0, 220.0),
+    vt_qrs_stretch_range: tuple[float, float] = (1.4, 2.0),
     atrial_jitter: float = 0.03,
     vent_jitter: float = 0.03,
     # Per-beat morphology jitter — small enough to preserve the regular,
@@ -528,6 +530,13 @@ def generate_avb_window(
             qrst_template = _stretch_qrst(tmpl, scale)
         else:
             qrst_template = paced_bank[int(rng.integers(0, len(paced_bank)))]
+    elif scenario == "vt":
+        # Monomorphic ventricular tachycardia: wide QRS, no atrial activity,
+        # fast regular rate. Stretch a sinus template into a wide ectopic
+        # QRS-T (more aggressive stretch than ventricular escape).
+        tmpl = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
+        vt_scale = float(rng.uniform(*vt_qrs_stretch_range))
+        qrst_template = _stretch_qrst(tmpl, vt_scale)
     else:
         qrst_template = bank.qrst[lead][int(rng.integers(0, len(bank.qrst[lead])))]
 
@@ -597,6 +606,13 @@ def generate_avb_window(
             _place_p(tp)
         for tv in v_times:
             _place_qrst(tv)
+    elif scenario == "vt":
+        # No P-waves at all — pure fast regular ventricular rhythm.
+        vt_bpm = float(rng.uniform(*vt_bpm_range))
+        v_times = _gen_atrial_times(vt_bpm, fs, n_samples, vent_jitter, rng)
+        for tv in v_times:
+            if 0 <= tv < n_samples:
+                _place_qrst(tv)
     else:
         if scenario == "mobitz1":
             pairs = _gen_ventricular_for_mobitz1(p_times, fs, rng)
