@@ -278,10 +278,12 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """Load the bundled layered-codec model (frame/beat/rhythm) for use as the
     ``model=`` argument to :func:`encode`.
 
-    Defaults to the packaged ``codec_v4.pt`` (pure-real + lydus hospital rhythm,
-    sample-resolution multi-head, 500 Hz). codec_v4 == codec_v3 with the beat
-    head upgraded on +vitaldb VPC (frame & rhythm are byte-identical to codec_v3;
-    DS2 VPC F1 0.858 -> 0.935). Requires torch. Cached per (ckpt, device).
+    Defaults to the packaged ``codec_v5.pt`` (pure-real + lydus hospital rhythm,
+    sample-resolution multi-head, 500 Hz). codec_v5 == codec_v4 with the rhythm
+    head upgraded (natural-prior re-fit + logit-bias calibration); frame & beat
+    are BYTE-IDENTICAL to codec_v4 (frame boundary-F1 0.829 / DS2 VPC 0.935
+    unchanged), hospital rhythm macro-F1 0.792 -> 0.805 (bbb 0.618 -> 0.651).
+    Requires torch. Cached per (ckpt, device).
 
         >>> import openecg
         >>> m = openecg.load_codec()
@@ -289,7 +291,7 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """
     from pathlib import Path as _Path
     if ckpt is None:
-        ckpt = str(_Path(__file__).with_name("models") / "codec_v4.pt")
+        ckpt = str(_Path(__file__).with_name("models") / "codec_v5.pt")
     key = (ckpt, device)
     if key in _CODEC_CACHE:
         return _CODEC_CACHE[key]
@@ -300,7 +302,7 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     return model
 
 
-def load_codec_onnx(onnx_path: str | None = None, *, version: str = "v4"):
+def load_codec_onnx(onnx_path: str | None = None, *, version: str = "v5"):
     """Load the bundled **int8 ONNX** layered codec as a ``model=`` argument
     for :func:`encode` — a torch-free path that needs only ``onnxruntime``.
 

@@ -286,7 +286,7 @@ CODEC_SEQ = 5000          # samples per window the bundled codec expects (10 s @
 CODEC_FS = 500            # native sample rate of the codec ONNX graph
 
 
-def bundled_codec_onnx_path(version: str = "v4") -> Path:
+def bundled_codec_onnx_path(version: str = "v5") -> Path:
     """Path to the int8 ONNX layered codec shipped inside the package.
 
     ``codec_{version}_int8.onnx`` (~3.6 MB) carries all three heads
@@ -324,7 +324,7 @@ class OnnxCodec:
     SEQ = CODEC_SEQ
 
     def __init__(self, onnx_path: str | Path | None = None, *,
-                 version: str = "v4", providers: list[str] | None = None):
+                 version: str = "v5", providers: list[str] | None = None):
         import onnxruntime as ort  # local: keep onnxruntime optional
         if onnx_path is None:
             onnx_path = bundled_codec_onnx_path(version)
