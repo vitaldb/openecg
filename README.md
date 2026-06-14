@@ -88,25 +88,26 @@ trained heads (the model keeps separate frame+beat heads — heterogeneous label
 make a single trained head impractical, and a merged-head ablation showed a small beat
 cost for no frame gain).
 
-The bundled codec is **codec_v5** (`openecg.load_codec()`, 1.16 M params), trained
+The bundled codec is **codec_v6** (`openecg.load_codec()`, 1.16 M params), trained
 on **pure real, human-expert annotations only** — including **lydus cardiologist
 hospital rhythm** — no synthetic, no pseudo-labels. Held-out:
 
-- **frame** boundary macro-F1 **0.840**, median timing **8.7 ms** (LUDB, 500 Hz)
-- **beat** sinus F1 **0.992** / VPC **0.935** (MIT-BIH DS2)
-- **rhythm** on real hospital ECG (lydus-test, n=22 229) macro **0.805** — avb 0.77 /
-  paced 0.77 / afib 0.89 / **bbb 0.65**
+- **frame** boundary macro-F1 **0.855**, median timing **11.1 ms** (LUDB, 500 Hz)
+- **beat** sinus F1 **0.99** / VPC **0.929** (MIT-BIH DS2)
+- **rhythm** on real hospital ECG (lydus-test, n=22 229) macro **0.797**
 
-**v5 over v4: a pure rhythm-head upgrade** — only the rhythm head is changed
-(re-fit at the natural hospital class prior + per-class logit-bias calibration), so
-frame and beat are **byte-identical to codec_v4** (zero regression — frame-F1 0.840,
-VPC 0.935 unchanged) while hospital rhythm macro rises **0.792 → 0.805**, every class
-up, **bbb 0.618 → 0.651** (the rare-class equity target). The fix was *calibration,
-not features*: lydus-train is sinus-capped but the deployment prior is sinus-heavy,
-so v4 over-called rare classes; re-fitting at the true prior corrects it. Earlier
-codec_v4 was itself a pure VPC-beat upgrade over codec_v3 (VPC 0.858 → 0.935). See
-the [model card](openecg/models/codec_v5_MODEL_CARD.md). `encode()` auto
-rank-normalizes its input. Deploy artifacts (int8 ONNX) ship in `openecg/models/`.
+**v6 over v5: a structural-prior FRAME upgrade.** The frame head is retrained with a
+**data-derived physiological structure loss** — from LUDB labels the waves P/QRS/T
+*never directly touch* (a baseline sample always separates them), so the loss penalizes
+forbidden wave→wave transitions + adds a total-variation contiguity term, directly
+fixing the over-segmentation that capped frame quality. This lifts boundary-F1
+**0.829 → 0.855 (+0.026)** and timing 11.6 → 11.1 ms — breaking the prior
+"annotation-noise ceiling". The beat & rhythm heads are then re-derived on the new
+backbone (frozen-head, +vitaldb VPC and natural-prior), recovering them to VPC 0.929 /
+rhythm 0.797 (small ~0.01 cost). Earlier codec_v5 was a pure rhythm-calibration upgrade
+(bbb 0.618 → 0.651). See the [model card](openecg/models/codec_v6_MODEL_CARD.md).
+`encode()` auto rank-normalizes its input. Deploy artifacts (int8 ONNX) ship in
+`openecg/models/`.
 
 The three channels run in parallel at the input signal's sample rate.
 Each layer is a separate label stream at a different abstraction — wave

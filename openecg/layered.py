@@ -320,12 +320,13 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """Load the bundled layered-codec model (frame/beat/rhythm) for use as the
     ``model=`` argument to :func:`encode`.
 
-    Defaults to the packaged ``codec_v5.pt`` (pure-real + lydus hospital rhythm,
-    sample-resolution multi-head, 500 Hz). codec_v5 == codec_v4 with the rhythm
-    head upgraded (natural-prior re-fit + logit-bias calibration); frame & beat
-    are BYTE-IDENTICAL to codec_v4 (frame boundary-F1 0.829 / DS2 VPC 0.935
-    unchanged), hospital rhythm macro-F1 0.792 -> 0.805 (bbb 0.618 -> 0.651).
-    Requires torch. Cached per (ckpt, device).
+    Defaults to the packaged ``codec_v6.pt`` (pure-real + lydus hospital rhythm,
+    sample-resolution multi-head, 500 Hz). codec_v6 adds a **structural-prior frame
+    retrain** (penalize physiologically-forbidden wave→wave transitions + TV
+    contiguity — from LUDB labels, P/QRS/T never directly touch) then re-derives the
+    beat & rhythm heads (frozen-head, vitaldb VPC + natural-prior). Frame boundary-F1
+    **0.829 → 0.855** (+0.026), median timing 11.6 → 11.1 ms; beat VPC 0.935 → 0.929,
+    rhythm 0.805 → 0.797 (tiny). Requires torch. Cached per (ckpt, device).
 
         >>> import openecg
         >>> m = openecg.load_codec()
@@ -333,7 +334,7 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     """
     from pathlib import Path as _Path
     if ckpt is None:
-        ckpt = str(_Path(__file__).with_name("models") / "codec_v5.pt")
+        ckpt = str(_Path(__file__).with_name("models") / "codec_v6.pt")
     key = (ckpt, device)
     if key in _CODEC_CACHE:
         return _CODEC_CACHE[key]
@@ -344,7 +345,7 @@ def load_codec(ckpt: str | None = None, device: str = "cpu"):
     return model
 
 
-def load_codec_onnx(onnx_path: str | None = None, *, version: str = "v5"):
+def load_codec_onnx(onnx_path: str | None = None, *, version: str = "v6"):
     """Load the bundled **int8 ONNX** layered codec as a ``model=`` argument
     for :func:`encode` — a torch-free path that needs only ``onnxruntime``.
 

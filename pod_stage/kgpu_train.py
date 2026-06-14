@@ -108,9 +108,12 @@ TRAINABLE_WHEN_FROZEN = ("rhythm_sample.", "beat_sample.")  # heads that don't f
 
 
 def build_model(device, init_ckpt="", freeze_backbone=False,
-                d_model=0, n_layers=0, n_heads=0, ff=0, trainable=None, use_logvar=False):
+                d_model=0, n_layers=0, n_heads=0, ff=0, trainable=None, use_logvar=False,
+                frame_classes=0):
     blob = torch.load(V56C, map_location="cpu", weights_only=False)
     cfg = dict(blob.get("model_config", {})); cfg["patch_size"] = PATCH
+    if frame_classes > 0:        # --unified: merge frame+beat into an 8-class frame head
+        cfg["n_classes"] = frame_classes
     for k in ("arch", "aux_target", "use_aux", "n_input_channels", "use_reg", "n_reg",
               "sample_res_frame", "tokenizer", "use_lead_emb", "beat_n_classes", "rhythm_n_classes",
               "use_logvar"):
@@ -185,6 +188,20 @@ def main():
     ap.add_argument("--lambda-rhythm", type=float, default=0.5)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--rhythm-boost", type=float, default=1.0)
+    ap.add_argument("--beat-fusion-boost", type=float, default=1.0,
+                    help="oversample windows containing a fusion beat (class 4) by this "
+                         "factor — fusion is ~1%% of data and needs sampling, not just loss weight")
+    ap.add_argument("--unified", action="store_true",
+                    help="MERGE frame+beat into one 8-class per-sample head "
+                         "(0 other,1 P,2 T,3 sinus,4 vpc,5 paced,6 fusion,7 unknown). "
+                         "Trains the frame head on the unified label, skips the beat loss. "
+                         "Regression test vs the 2-head design.")
+    ap.add_argument("--unified-loss", default="flat", choices=["flat", "hier"],
+                    help="flat = one 8-class softmax-CE on the unified label; "
+                         "hier = factored loss: wave-CE (other/P/QRS/T, QRS=logsumexp of "
+                         "beat logits) + conditional beat-CE (5-class, on QRS samples only)")
+    ap.add_argument("--lambda-unified-beat", type=float, default=1.0,
+                    help="weight on the conditional beat-CE term in --unified-loss hier")
     ap.add_argument("--rhythm-prior", default="",
                     help="comma list of 6 target rhythm-class sampling fractions "
                          "(e.g. test prior '0.705,0.073,0.039,0.101,0.081,0'); reweights "
@@ -198,6 +215,13 @@ def main():
     ap.add_argument("--num-samples", type=int, default=0,
                     help="sampler draws per epoch (equal-compute ablation); 0=auto (nr*2 / max(nr,ns)*2)")
     ap.add_argument("--focal-gamma", type=float, default=0.0)
+    ap.add_argument("--struct-forbid", type=float, default=0.0,
+                    help="weight on the data-derived FORBIDDEN-transition penalty: "
+                         "waves (P/QRS/T) never directly touch (a baseline 'other' sample "
+                         "always separates them) — penalize expected wave_t -> different-wave_{t+1}")
+    ap.add_argument("--struct-tv", type=float, default=0.0,
+                    help="weight on a total-variation (contiguity) penalty on the frame "
+                         "softmax — suppresses spurious short waves (over-segmentation)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--init-ckpt", default="",
@@ -275,6 +299,10 @@ def main():
             rare = np.isin(real.rhythm, [1, 2, 4]).any(axis=1)
             wv[rare] *= args.rhythm_boost
             print(f"rhythm-boost {args.rhythm_boost}x on {int(rare.sum())}/{nr} rare-rhythm windows", flush=True)
+        if args.beat_fusion_boost > 1.0:
+            fus = (real.beat == 4).any(axis=1)
+            wv[fus] *= args.beat_fusion_boost
+            print(f"beat-fusion-boost {args.beat_fusion_boost}x on {int(fus.sum())}/{nr} fusion windows", flush=True)
         if args.rhythm_prior:
             target = np.array([float(x) for x in args.rhythm_prior.split(",")], dtype=np.float64)
             rlab = real.rhythm[:, 0].astype(np.int64)
@@ -324,7 +352,9 @@ def main():
     print(f"rhythm cw {rcw.cpu().numpy().round(2)}  beat cw {bcw.cpu().numpy().round(2)}", flush=True)
 
     _trainable = None
-    if args.beat_only:
+    if args.unified and args.freeze_backbone:
+        _trainable = ("head_sample.",)            # unified head only (frozen-head analog)
+    elif args.beat_only:
         _trainable = ("beat_sample.",)
     elif args.frame_only:
         _trainable = ("head_sample.",)
@@ -333,7 +363,7 @@ def main():
     model = build_model(device, args.init_ckpt, args.freeze_backbone,
                         d_model=args.d_model, n_layers=args.n_layers,
                         n_heads=args.n_heads, ff=args.ff, trainable=_trainable,
-                        use_logvar=args.logvar)
+                        use_logvar=args.logvar, frame_classes=(8 if args.unified else 0))
     print(f"params {sum(p.numel() for p in model.parameters()):,}", flush=True)
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                             lr=args.lr, weight_decay=1e-4)
@@ -399,15 +429,77 @@ def main():
         loss = -torch.log(p_true.clamp_min(1e-6))
         return loss[m].mean() if m.any() else (mu.sum() * 0.0)
 
+    def _unified_label(fr, bt):
+        """Merge frame(0 other,1 P,2 QRS,3 T,4 pacedQRS) + beat(1 sinus..5 unknown,
+        QRS-gated) into one 8-class per-sample target
+        (0 other,1 P,2 T,3 sinus,4 vpc,5 paced,6 fusion,7 unknown). IGN preserved
+        where neither source knows the class (so split supervision is kept)."""
+        u = torch.full_like(fr, IGN)
+        u = torch.where(fr == 0, torch.zeros_like(fr), u)        # other
+        u = torch.where(fr == 1, torch.ones_like(fr), u)         # P -> 1
+        u = torch.where(fr == 3, torch.full_like(fr, 2), u)      # T -> 2
+        qrs_frame = (fr == 2) | (fr == 4)
+        u = torch.where(qrs_frame, torch.full_like(fr, 3), u)    # frame QRS, type unknown -> sinus default
+        known_beat = (bt >= 1) & (bt <= 5)                       # beat-active = QRS w/ known type
+        u = torch.where(known_beat, bt + 2, u)                   # sinus1->3 .. unknown5->7
+        return u
+
+    def _unified_hier_loss(logits, fr, bt):
+        """Factored loss on the 8-class unified logits (B,8,T): a wave-level CE
+        (other/P/QRS/T, where the QRS marginal = logsumexp of the 5 beat-type
+        logits) + a conditional beat-type CE (5-class) on QRS samples only. The
+        wave delineation and the beat morphology get clean, non-competing
+        gradients while the model still emits ONE 8-class output."""
+        z = logits                                              # (B,8,T)
+        qrs_lse = torch.logsumexp(z[:, 3:8, :], dim=1, keepdim=True)
+        wave_logits = torch.cat([z[:, 0:2, :], qrs_lse, z[:, 2:3, :]], dim=1)  # other,P,QRS,T
+        fr_w = torch.where(fr == 4, torch.full_like(fr, 2), fr)  # pacedQRS -> QRS
+        wave_loss = F.cross_entropy(wave_logits, fr_w, ignore_index=IGN)
+        beat_logits = z[:, 3:8, :]                              # sinus..unknown
+        beat_tgt = torch.where((bt >= 1) & (bt <= 5), bt - 1,
+                               torch.full_like(bt, IGN))
+        beat_loss = F.cross_entropy(beat_logits, beat_tgt, weight=bcw[1:6],
+                                    ignore_index=IGN)
+        return wave_loss + args.lambda_unified_beat * torch.nan_to_num(beat_loss)
+
+    def _struct_loss(frame_logits):
+        """Data-derived structural prior on the frame softmax (B,C,T). Waves
+        (P/QRS/T) never directly touch — a baseline 'other' always separates them
+        (empirical transition freq P<->QRS<->T == 0). Returns (forbid, tv):
+        forbid = expected mass on wave_t -> DIFFERENT-wave_{t+1} (push baseline
+        between waves); tv = total-variation of the softmax (contiguity / anti
+        over-segmentation)."""
+        p = torch.softmax(frame_logits, dim=1)
+        C = p.shape[1]
+        if C == 8:                               # unified -> reduce to wave-level
+            p = torch.stack([p[:, 0], p[:, 1], p[:, 2], p[:, 3:8].sum(1)], dim=1)  # other,P,T,QRS
+            waves = (1, 2, 3)
+        else:
+            waves = (1, 2, 3) if C == 4 else (1, 2, 3, 4)
+        pa, pb = p[:, :, :-1], p[:, :, 1:]
+        forbid = sum((pa[:, i] * pb[:, j]).mean() for i in waves for j in waves if i != j)
+        tv = (pa - pb).abs().mean()
+        return forbid, tv
+
     def losses(batch):
         sig, lead, fr, rh, bt = [x.to(device) for x in batch]
         out = model(sig, lead)
         frame, beat, rhythm = out[0], out[1], out[2]
-        if args.logvar:
+        if args.unified:
+            if args.unified_loss == "hier":
+                lf = _unified_hier_loss(frame.transpose(1, 2), fr, bt)
+            else:
+                lf = _frame_ce(frame.transpose(1, 2), _unified_label(fr, bt))
+            lb = frame.sum() * 0.0                               # no separate beat head
+        elif args.logvar:
             lf = _hetero_frame_loss(frame, out[3], fr)
+            lb = _ce(beat.transpose(1, 2), bt, bcw)
         else:
             lf = _frame_ce(frame.transpose(1, 2), fr)
-        lb = _ce(beat.transpose(1, 2), bt, bcw)
+            lb = _ce(beat.transpose(1, 2), bt, bcw)
+        if args.struct_forbid > 0 or args.struct_tv > 0:
+            fb, tv = _struct_loss(frame.transpose(1, 2))
+            lf = lf + args.struct_forbid * fb + args.struct_tv * tv
         lr = _ce(rhythm.transpose(1, 2), rh, rcw)
         lf = torch.nan_to_num(lf); lb = torch.nan_to_num(lb); lr = torch.nan_to_num(lr)
         return lf, lb, lr
@@ -444,14 +536,21 @@ def main():
         for sig, lead, fr, rh, bt in vl:
             _o = model(sig.to(device), lead.to(device))
             frame, beat, rhythm = _o[0], _o[1], _o[2]
-            for name, pred, tgt in (("frame", frame, fr), ("rhythm", rhythm, rh), ("beat", beat, bt)):
+            if args.unified:                       # frame head is the 8-class unified label
+                heads = (("frame", frame, _unified_label(fr.to(device), bt.to(device)).cpu()),
+                         ("rhythm", rhythm, rh))
+            else:
+                heads = (("frame", frame, fr), ("rhythm", rhythm, rh), ("beat", beat, bt))
+            for name, pred, tgt in heads:
                 p = pred.argmax(-1).cpu(); m = (tgt != IGN)
                 if name == "beat":
                     m = m & (tgt != 0)
                 if m.any():
                     pred_all[name].append(p[m].numpy()); true_all[name].append(tgt[m].numpy())
         scores = {}
-        for name, n_cls, drop in (("frame", 4, None), ("rhythm", 6, None), ("beat", 6, 0)):
+        _spec = (("frame", 8, None), ("rhythm", 6, None)) if args.unified else \
+                (("frame", 4, None), ("rhythm", 6, None), ("beat", 6, 0))
+        for name, n_cls, drop in _spec:
             if true_all[name]:
                 scores[name] = _macro_f1(np.concatenate(pred_all[name]),
                                          np.concatenate(true_all[name]), n_cls, drop_class=drop)
@@ -466,10 +565,10 @@ def main():
             lf, lb, lr = losses(batch); loss = lf + args.lambda_beat * lb + args.lambda_rhythm * lr
             opt.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
             tot += float(loss.item()); nb += 1
-        f1 = real_val(); score = f1["frame"] + f1["rhythm"] + f1["beat"]; imp = score > best
+        f1 = real_val(); score = sum(f1.values()); imp = score > best
         print(f"[ep {ep+1:3d}] {'+' if imp else ' '} loss={tot/max(1,nb):.4f} "
-              f"frame_f1={f1['frame']:.4f} rhythm_f1={f1['rhythm']:.4f} beat_f1={f1['beat']:.4f} "
-              f"{time.time()-t0:.0f}s", flush=True)
+              f"frame_f1={f1.get('frame',0):.4f} rhythm_f1={f1.get('rhythm',0):.4f} "
+              f"beat_f1={f1.get('beat',0):.4f} {time.time()-t0:.0f}s", flush=True)
         if imp:
             best = score
             torch.save({"model_state": model.state_dict(), "model_config": dict(model.model_config),
