@@ -76,9 +76,17 @@ import openecg
 codec = openecg.encode(ecg_500hz, fs=500, model="default")   # 10-s window @ 500 Hz
 codec.channels                              # uint8 (3, 5000) at sample resolution
 codec.frame, codec.beat, codec.rhythm       # per-layer views
+codec.unified                               # merged frame+beat: 1 track, 8 classes
 codec.events("beat", drop_class=0)          # [(start, end, class_id), ...]
 codec.to_codec_string(layer="frame")        # ASCII rendering
 ```
+
+`codec.unified` collapses the frame and (QRS-gated) beat tracks into one readable
+8-class per-sample stream — `other / P / T / sinus / vpc / paced / fusion / unknown`
+(each QRS replaced by its beat type). A consumption convenience derived from the two
+trained heads (the model keeps separate frame+beat heads — heterogeneous label sources
+make a single trained head impractical, and a merged-head ablation showed a small beat
+cost for no frame gain).
 
 The bundled codec is **codec_v5** (`openecg.load_codec()`, 1.16 M params), trained
 on **pure real, human-expert annotations only** — including **lydus cardiologist

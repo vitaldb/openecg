@@ -46,7 +46,7 @@ Lower-level pieces (``pacer_center_surround_score``, the multichannel
 features, the BUT PDB / LUDB / PTB-XL / MIT-BIH loaders, etc.) live in
 their respective modules and are not re-exported here.
 """
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 from openecg.afib import afib_score, is_afib
 from openecg.dsp import rank_normalize, remove_baseline_wander

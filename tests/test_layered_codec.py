@@ -124,3 +124,35 @@ def test_encode_stream_loads_string_model_reference_once(monkeypatch):
     assert c.channels.shape == (3, sig.size)
     assert calls == [("custom.pt", "cuda")]
     assert predictor.calls > 1
+
+
+def test_unified_merges_frame_and_beat():
+    """`unified` = frame with QRS samples replaced by beat type (8-class)."""
+    from openecg.eval import SUPER_OTHER, SUPER_P, SUPER_QRS, SUPER_T
+    from openecg.layered import (
+        BEAT_VPC, UNIFIED_NAMES, UNIFIED_OTHER, UNIFIED_P, UNIFIED_T,
+        UNIFIED_SINUS, UNIFIED_VPC, UNIFIED_UNKNOWN,
+    )
+    # frame: other P QRS T ; beat: sinus on first QRS, vpc on second
+    frame = np.array([SUPER_OTHER, SUPER_P, SUPER_QRS, SUPER_T,
+                      SUPER_OTHER, SUPER_QRS], dtype=np.uint8)
+    beat = np.array([BEAT_NONE, BEAT_NONE, BEAT_SINUS, BEAT_NONE,
+                     BEAT_NONE, BEAT_VPC], dtype=np.uint8)
+    rhythm = np.full(6, RHYTHM_SINUS, dtype=np.uint8)
+    c = LayeredCodec(fs=250, channels=np.stack([frame, beat, rhythm]))
+    u = c.unified
+    assert u.dtype == np.uint8 and u.shape == (6,)
+    assert list(u) == [UNIFIED_OTHER, UNIFIED_P, UNIFIED_SINUS, UNIFIED_T,
+                       UNIFIED_OTHER, UNIFIED_VPC]
+    assert UNIFIED_NAMES[UNIFIED_VPC] == "vpc"
+
+
+def test_unified_untyped_qrs_falls_back_to_unknown():
+    """A QRS sample with no beat type reads as 'unknown', not a wave class."""
+    from openecg.eval import SUPER_QRS
+    from openecg.layered import UNIFIED_UNKNOWN
+    frame = np.array([SUPER_QRS, SUPER_QRS], dtype=np.uint8)
+    beat = np.array([BEAT_NONE, BEAT_NONE], dtype=np.uint8)   # QRS but untyped
+    rhythm = np.zeros(2, dtype=np.uint8)
+    c = LayeredCodec(fs=250, channels=np.stack([frame, beat, rhythm]))
+    assert list(c.unified) == [UNIFIED_UNKNOWN, UNIFIED_UNKNOWN]

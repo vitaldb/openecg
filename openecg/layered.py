@@ -71,6 +71,25 @@ CLASS_NAMES_BY_LAYER = {
     "rhythm": RHYTHM_NAMES,
 }
 
+# ---- Unified frame+beat view --------------------------------------------
+# A single per-sample track that merges the frame (wave) and beat channels:
+# the frame channel with each QRS sample REPLACED by its beat type (the beat
+# channel is only meaningful inside QRS, so the two are complementary). This
+# is a consumption/rendering convenience derived from the two trained heads —
+# the model still has separate frame + beat heads (heterogeneous label sources
+# make a single trained head impractical; see LayeredCodec.unified).
+UNIFIED_OTHER, UNIFIED_P, UNIFIED_T = 0, 1, 2
+UNIFIED_SINUS, UNIFIED_VPC, UNIFIED_PACED, UNIFIED_FUSION, UNIFIED_UNKNOWN = 3, 4, 5, 6, 7
+UNIFIED_NAMES = {
+    0: "other", 1: "P", 2: "T", 3: "sinus", 4: "vpc",
+    5: "paced", 6: "fusion", 7: "unknown",
+}
+# beat class id -> unified QRS-type id
+_BEAT_TO_UNIFIED = {
+    BEAT_SINUS: UNIFIED_SINUS, BEAT_VPC: UNIFIED_VPC, BEAT_PACED: UNIFIED_PACED,
+    BEAT_FUSION: UNIFIED_FUSION, BEAT_UNKNOWN: UNIFIED_UNKNOWN,
+}
+
 _DEFAULT_RENDER_CHARS = {
     "frame":  {SUPER_OTHER: "-", SUPER_P: "p", SUPER_QRS: "Q",
                SUPER_T: "t", SUPER_PACED_QRS: "P"},
@@ -131,6 +150,29 @@ class LayeredCodec:
     def rhythm(self) -> np.ndarray: return self.channels[2]
     @property
     def n_samples(self) -> int:     return int(self.channels.shape[1])
+
+    @property
+    def unified(self) -> np.ndarray:
+        """Single 8-class per-sample track merging frame + beat: the frame
+        channel with each QRS sample replaced by its beat type. Classes:
+        ``0 other, 1 P, 2 T, 3 sinus, 4 vpc, 5 paced, 6 fusion, 7 unknown``
+        (see :data:`UNIFIED_NAMES`). The beat channel is meaningful only inside
+        QRS, so this collapses the two complementary tracks into one readable
+        stream — P/T waves and beat-typed QRS complexes on a single axis::
+
+            codec.unified                          # uint8[n_samples]
+            [UNIFIED_NAMES[c] for c in codec.unified]
+
+        A QRS sample the beat head left untyped falls back to ``unknown``.
+        """
+        f, b = self.frame, self.beat
+        u = np.zeros(self.n_samples, dtype=np.uint8)
+        u[f == SUPER_P] = UNIFIED_P
+        u[f == SUPER_T] = UNIFIED_T
+        u[np.isin(f, ALL_SUPER_QRS_CLASSES)] = UNIFIED_UNKNOWN   # QRS, type t.b.d.
+        for beat_id, uni_id in _BEAT_TO_UNIFIED.items():         # beat is QRS-gated
+            u[b == beat_id] = uni_id
+        return u
 
     @property
     def margin_samples(self) -> int:
@@ -656,5 +698,5 @@ __all__ = [
     "BEAT_UNKNOWN", "BEAT_NAMES",
     "RHYTHM_SINUS", "RHYTHM_AVB", "RHYTHM_PACED", "RHYTHM_AFIB",
     "RHYTHM_BBB", "RHYTHM_VENT", "RHYTHM_NAMES",
-    "CLASS_NAMES_BY_LAYER",
+    "CLASS_NAMES_BY_LAYER", "UNIFIED_NAMES",
 ]
