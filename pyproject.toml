@@ -1,6 +1,6 @@
 [project]
 name = "openecg"
-version = "0.10.0"
+version = "0.11.0"
 description = "Clinically-grounded discrete tokenization and per-frame wave segmentation for electrocardiograms"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -9,7 +9,10 @@ without touching the per-sample codec channels.  It fuses three sources:
   * the **pure-numpy QRS detector** (:func:`openecg.detect_qrs`) — the robust,
     validated heart-rate / R-peak source;
   * the **rule-based AFib check** (:func:`openecg.afib_score`) — an independent
-    second opinion that is cross-checked against the codec's rhythm head.
+    second opinion that is cross-checked against the codec's rhythm head;
+  * the **rule-based pacemaker-spike check** (:func:`openecg.detect_pacings`) —
+    the *authoritative* pacing signal, since the codec's neural ``paced`` rhythm
+    class never learned the spike and is unreliable.
 
     >>> import openecg
     >>> rep = openecg.report(signal_500hz, fs=500)
@@ -35,8 +38,9 @@ import numpy as np
 from openecg.afib import afib_score
 from openecg.layered import (
     BEAT_NAMES, BEAT_NONE, BEAT_VPC, DEFAULT_WINDOW_S, RHYTHM_AFIB,
-    RHYTHM_NAMES, encode, encode_stream,
+    RHYTHM_NAMES, RHYTHM_PACED, encode, encode_stream,
 )
+from openecg.pacer import detect_pacings
 from openecg.qrs import detect_qrs
 
 # Frame-layer wave classes (kept local to avoid an eval import in callers).
@@ -64,6 +68,7 @@ class EcgReport:
     beats: dict
     intervals_ms: dict
     afib_check: dict
+    pacing_check: dict = field(default_factory=dict)
     flags: list = field(default_factory=list)
     summary: str = ""
 
@@ -164,6 +169,32 @@ def _rhythm_distribution(rhythm_channel, mask):
     return RHYTHM_NAMES.get(dom_id, str(dom_id)), round(cnts.max() / total, 3), dist
 
 
+def _pacing_check(sig, fs, peaks, n_beats) -> dict:
+    """Rule-based pacemaker-spike check — the AUTHORITATIVE pacing signal.
+
+    The codec's neural ``paced`` rhythm class is unreliable (it never learned the
+    high-frequency spike: ~0.02 recall on confirmed pacing). :func:`detect_pacings`
+    (4-channel, fs-agnostic, ~100% specificity on modern ECG) is the right tool.
+    ``is_paced`` requires spikes on a substantial fraction of beats (a paced rhythm
+    has one spike per paced beat). **Caveat:** modern *bipolar* pacing often emits
+    no visible spike — a negative here does NOT rule out pacing.
+    """
+    try:
+        # whole-signal 4-channel detector (the validated, fs-agnostic config —
+        # ~100% specificity; do NOT pass qrs_indices, which localises to detect_qrs
+        # peaks and silently misses spikes when the HR estimate is off).
+        spikes = detect_pacings(sig, fs)
+    except Exception:
+        return {}
+    n_spk = int(np.asarray(spikes).size)
+    spb = round(n_spk / n_beats, 2) if n_beats else 0.0
+    # >=3 spikes is the high-precision point (~1% FP on sinus); when beats are
+    # known, also require spikes on a fair fraction of them (a paced rhythm spikes
+    # ~once per beat) to reject the odd spurious cluster.
+    is_paced = n_spk >= 3 and (n_beats < 3 or spb >= 0.3)
+    return {"is_paced": bool(is_paced), "n_spikes": n_spk, "spikes_per_beat": spb}
+
+
 # ---- public API ----------------------------------------------------------
 
 def report(signal, fs: int = 500, *, model=None, lead_id: int = 0,
@@ -222,6 +253,9 @@ def report(signal, fs: int = 500, *, model=None, lead_id: int = 0,
     # ---- independent rule-based AFib second opinion ---------------------
     sc = afib_score(sig, fs)
     afib_check = {"is_afib": bool(sc["is_afib"]), "reason": sc["reason"]}
+
+    # ---- rule-based pacemaker-spike check (authoritative over neural paced) --
+    pacing_check = _pacing_check(sig, fs, peaks, n_beats)
 
     # ---- codec: rhythm / beat type / wave intervals ---------------------
     rhythm = {"label": "unknown", "confidence": 0.0, "distribution": {}}
@@ -286,6 +320,15 @@ def report(signal, fs: int = 500, *, model=None, lead_id: int = 0,
         if rhythm["label"] != "unknown" else None
     if rhythm["label"] != "unknown" and afib_check["is_afib"] != codec_afib:
         flags.append("afib_rule_codec_disagreement")
+    if pacing_check:
+        codec_paced = rhythm["label"] == RHYTHM_NAMES[RHYTHM_PACED]
+        pacing_check["agrees_with_codec"] = codec_paced \
+            if rhythm["label"] != "unknown" else None
+        if pacing_check.get("is_paced"):
+            flags.append("paced_rhythm")
+            # the rule found spikes the unreliable codec rhythm head did not call paced
+            if rhythm["label"] != "unknown" and not codec_paced:
+                flags.append("pacing_spikes_codec_missed")
     if n_beats < 3:
         flags.append("too_few_beats")
     if bpm and bpm < _BRADY_BPM:
@@ -298,13 +341,14 @@ def report(signal, fs: int = 500, *, model=None, lead_id: int = 0,
     if amp < 0.1:  # < 0.1 mV peak deflection — likely lead-off / low voltage
         flags.append("low_amplitude")
 
-    summary = _summarize(rhythm, hr, beats, afib_check, flags)
+    summary = _summarize(rhythm, hr, beats, afib_check, pacing_check, flags)
     return EcgReport(fs=fs, duration_s=duration_s, rhythm=rhythm,
                      heart_rate=hr, beats=beats, intervals_ms=intervals_ms,
-                     afib_check=afib_check, flags=flags, summary=summary)
+                     afib_check=afib_check, pacing_check=pacing_check,
+                     flags=flags, summary=summary)
 
 
-def _summarize(rhythm, hr, beats, afib_check, flags) -> str:
+def _summarize(rhythm, hr, beats, afib_check, pacing_check, flags) -> str:
     """One human/agent-readable sentence."""
     parts = []
     rl = rhythm["label"]
@@ -319,6 +363,9 @@ def _summarize(rhythm, hr, beats, afib_check, flags) -> str:
     afib_tag = "positive" if afib_check["is_afib"] else "negative"
     tail = f"(AFib rule: {afib_tag}.)"
     s = ", ".join(parts) + ". " + tail
+    if pacing_check.get("is_paced"):
+        s += (f" PACED: {pacing_check['n_spikes']} pacemaker spikes detected "
+              f"({pacing_check['spikes_per_beat']}/beat).")
     if "low_amplitude" in flags:
         s += " WARNING: low signal amplitude — check lead contact."
     if "afib_rule_codec_disagreement" in flags:

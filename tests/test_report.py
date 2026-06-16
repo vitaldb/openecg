@@ -32,6 +32,17 @@ def _synth_sinus(rr_ms: int = 750, n_beats: int = 12, fs: int = FS):
     return sig.astype(np.float64), n
 
 
+def _synth_paced(rr_ms: int = 750, n_beats: int = 12, amp: float = 2.0, fs: int = FS):
+    """Sinus-like ECG with a narrow tall pacemaker spike ~40 ms before each QRS."""
+    sig, n = _synth_sinus(rr_ms=rr_ms, n_beats=n_beats, fs=fs)
+    for i in range(n_beats):
+        c = int((i + 1) * rr_ms * fs / 1000)
+        s = c - int(0.04 * fs)
+        sig[s] += amp
+        sig[s + 1] += amp * 0.5
+    return sig, n
+
+
 def test_rules_only_report_structure():
     """model='rules' returns a fully-formed report with no torch/onnx."""
     sig, _ = _synth_sinus()
@@ -40,7 +51,7 @@ def test_rules_only_report_structure():
     # Top-level keys present and typed.
     d = rep.to_dict()
     for k in ("fs", "duration_s", "rhythm", "heart_rate", "beats",
-              "intervals_ms", "afib_check", "flags", "summary"):
+              "intervals_ms", "afib_check", "pacing_check", "flags", "summary"):
         assert k in d
     # Heart rate recovered near the synthesized 80 bpm (750 ms RR).
     assert 70 <= rep.heart_rate["bpm"] <= 90
@@ -79,6 +90,26 @@ def test_summary_is_human_readable():
     rep = report(sig, fs=FS, model="rules")
     assert "HR" in rep.summary and "bpm" in rep.summary
     assert rep.summary.endswith(")")
+
+
+def test_pacing_detected_flags_paced():
+    """A signal with pacemaker spikes -> rule-based pacing_check fires + flag.
+    This is independent of the codec (the neural paced class is unreliable)."""
+    sig, _ = _synth_paced(amp=2.0)
+    rep = report(sig, fs=FS, model="rules")
+    assert rep.pacing_check["is_paced"] is True
+    assert rep.pacing_check["n_spikes"] >= 3
+    assert "paced_rhythm" in rep.flags
+    assert "PACED" in rep.summary
+
+
+def test_pacing_absent_on_clean_sinus():
+    """Clean sinus (no spikes) -> not flagged paced, no false positive."""
+    sig, _ = _synth_sinus()
+    rep = report(sig, fs=FS, model="rules")
+    assert rep.pacing_check["is_paced"] is False
+    assert rep.pacing_check["n_spikes"] == 0
+    assert "paced_rhythm" not in rep.flags
 
 
 def _has_onnx():

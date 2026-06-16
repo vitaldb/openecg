@@ -92,9 +92,12 @@ The bundled codec is **codec_v6** (`openecg.load_codec()`, 1.16 M params), train
 on **pure real, human-expert annotations only** — including **lydus cardiologist
 hospital rhythm** — no synthetic, no pseudo-labels. Held-out:
 
-- **frame** boundary macro-F1 **0.855**, median timing **11.1 ms** (LUDB, 500 Hz)
+- **frame** boundary macro-F1 **0.855** (**0.867** excl. 10 broken-label LUDB windows),
+  median timing **11.1 ms** (LUDB, 500 Hz)
 - **beat** sinus F1 **0.99** / VPC **0.929** (MIT-BIH DS2)
-- **rhythm** on real hospital ECG (lydus-test, n=22 229) macro **0.797**
+- **rhythm** on real hospital ECG (lydus-test, n=22 229) macro **0.797**; cross-cohort
+  audit on **CODE-test** (827, Brazil cardiologist gold) macro **0.767** — avb/afib
+  generalise (AUROC 0.99), bbb is at the single-lead-II ceiling (AUROC 0.946)
 
 **v6 over v5: a structural-prior FRAME upgrade.** The frame head is retrained with a
 **data-derived physiological structure loss** — from LUDB labels the waves P/QRS/T

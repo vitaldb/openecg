@@ -49,17 +49,62 @@ No pseudo-labels, no synthetic. LUDB/QTDB/ISP frame, MIT-BIH DS1 + vitaldb-arrhy
 ## Evaluation (held-out)
 | metric | **codec_v6** | codec_v5 |
 |---|---|---|
-| frame boundary macro-F1 (LUDB) | **0.855** | 0.829 |
+| frame boundary macro-F1 (LUDB val) | **0.855** | 0.829 |
+| frame boundary macro-F1 (LUDB val, clean) | **0.867** | — |
 | frame median timing | **11.1 ms** | 11.6 ms |
 | beat VPC F1 (MIT-BIH DS2) | 0.929 | 0.935 |
 | rhythm macro (lydus hospital test) | 0.797 | 0.805 |
+
+> **Frame "clean" val (0.867).** 10 of the 492 LUDB-val windows (2.0%) carry a P/T
+> label but **no QRS** — physiologically impossible; an artifact of LUDB's *per-lead*
+> partial annotation (the QRS was simply not marked on that lead). The model is penalised
+> for correctly predicting the un-annotated QRS, so 0.855 *understates* delineation.
+> Excluding those 10 broken-label windows gives **0.867**. Training was likewise cleaned
+> (11 such windows, 0.16%, IGN-masked; builder now guards against this).
+
+### Cross-cohort rhythm audit — CODE-test (independent, cardiologist gold standard)
+[CODE-test](https://zenodo.org/records/3765780) = 827 12-lead ECGs, Brazil/TNMG, multi-
+cardiologist consensus — **patient-disjoint from training** (lydus=Korea, PTB-XL=Germany),
+so an external rare-class generalisation check. Exam-level labels mapped to lead II:
+1dAVb→avb, RBBB/LBBB→bbb, AF→afib, SB/ST→sinus (818 single-label exams).
+
+| class | lydus F1 | CODE-test F1 | CODE-test AUROC |
+|---|---|---|---|
+| sinus | 0.943 | 0.931 | 0.944 |
+| avb | 0.760 | 0.778 | **0.994** |
+| afib | 0.898 | 0.846 | **0.999** |
+| bbb | 0.625 | 0.513 | 0.946 |
+| macro | **0.797** | **0.767** | — |
+
+**avb and afib generalise cross-cohort** (near-identical F1 on an unseen country; afib
+recall 1.000 on CODE-test). **bbb F1 understates detection:** its ranking is good
+(AUROC 0.946, recall 0.87) — the low F1/precision is the rare-class base rate plus the
+genuine single-lead limit below, not a detection failure.
 
 ## Limitations (read before use)
 - **Small beat/rhythm cost** vs v5 (VPC −0.006, rhythm −0.008): the struct full-FT perturbs
   the shared backbone and the frozen-head re-derive recovers ~99%, not 100%. If your use is
   beat/rhythm-critical and not frame-critical, codec_v5 may suit better.
-- `ventricular` rhythm untested on hospital data; `fusion`/`paced` beats weak. **bbb is
-  lead-II-limited.** Single-lead, 500 Hz, 10 s windows.
+- `ventricular` rhythm untested on hospital data; `fusion`/`paced` beats weak.
+- **`paced` rhythm: prefer the rule-based spike detector, not the neural class.** The
+  neural `paced` scores recall 0.65 on lydus (`Possible pacing`, uncertain labels) but only
+  ~0.02 on *confirmed* pacing (MIT-BIH 102/104/217) — it never learned the pacemaker spike.
+  `openecg.detect_pacings` / `is_paced_record` (rule-based) recovers confirmed pacing
+  (recall ~0.99 at `threshold_z≈12`; the default `threshold_z=32` is a deliberate
+  high-specificity point that under-detects on lower-bandwidth/older sources like mitdb —
+  **tune `threshold_z` per source**, it does not transfer). Caveat: this works only when
+  the spike is in the signal — modern
+  **bipolar** pacing often has no visible spike (much of lydus), an inherent limit no
+  method overcomes. Use the spike detector for spike-present pacing; treat the neural
+  `paced` class as unreliable.
+- **bbb is at the single-lead-II ceiling** (AUROC 0.946, F1 ~0.51–0.57). It detects bbb
+  well (recall 0.87 cross-cohort) but over-calls normal sinus (precision ~0.36). This is a
+  genuine *information* limit, not a fixable model deficiency: BBB's discriminating
+  morphology (rSR′/notched R) lives in V1/V6, while lead II shows only QRS widening — so
+  avb (PR/dropped beats) and afib (irregular/no-P) reach AUROC 0.99 but bbb cannot.
+  Verified 2026-06-16: neither hemiblock-label cleaning nor threshold recalibration gives a
+  transferable gain; closing it needs multi-lead input (out of scope for a single-lead codec).
+- Single-lead, 500 Hz, 10 s windows.
 - **Research/educational only. Not a medical device; not for diagnosis.**
 
 ## Artifacts
