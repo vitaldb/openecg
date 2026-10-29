@@ -75,6 +75,12 @@ deploy = ["tflite-runtime>=2.14", "onnxruntime>=1.17", "numpy>=1.26"]
 # ONNX codec — the minimal lightweight path: onnxruntime + numpy only.
 report = ["onnxruntime>=1.17", "numpy>=1.26"]
 
+# OpenVINO runtime (`openecg.openvino_backend`): the v56c fp32 ONNX release
+# asset on any OpenVINO device (CPU, GPU, NPU, AUTO). onnxruntime is the
+# reference for the parity check.
+# PyTorch is NOT required. Nothing outside openecg.openvino_backend imports it.
+openvino = ["openvino>=2025.0", "onnxruntime>=1.17"]
+
 # Dev-only: PyTorch → TFLite conversion for `openecg.deploy.export_boundary_tflite`.
 deploy-export = [
     "torch>=2.6",
